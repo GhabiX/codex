@@ -110,6 +110,47 @@ struct FileToolDescription {
 }
 
 impl SpineConfig {
+    /// Captures resolved text and tool configuration independently of future defaults.
+    /// Feature activation remains owned by the host session's feature settings.
+    pub fn snapshot_toml(&self) -> Result<String, ConfigError> {
+        let mut tools = toml::Table::new();
+        for (name, description) in [
+            ("open", &self.tool_descriptions.open),
+            ("close", &self.tool_descriptions.close),
+            ("next", &self.tool_descriptions.next),
+            ("spawn", &self.tool_descriptions.spawn),
+        ] {
+            if let Some(description) = description {
+                tools.insert(
+                    name.to_string(),
+                    toml::Value::Table(toml::Table::from_iter([(
+                        "description".to_string(),
+                        toml::Value::String(description.clone()),
+                    )])),
+                );
+            }
+        }
+        let prompt = toml::Table::from_iter(
+            [
+                ("jit", &self.jit_prompt),
+                ("node", &self.node_prompt),
+                ("spawn", &self.spawn_prompt),
+                (
+                    "spawn_explicit_request_only",
+                    &self.spawn_explicit_request_only_prompt,
+                ),
+                ("spawn_proactive", &self.spawn_proactive_prompt),
+            ]
+            .map(|(name, value)| (name.to_string(), toml::Value::String(value.clone()))),
+        );
+        toml::to_string(&toml::Table::from_iter([
+            ("schema_version".to_string(), toml::Value::Integer(1)),
+            ("prompt".to_string(), toml::Value::Table(prompt)),
+            ("tools".to_string(), toml::Value::Table(tools)),
+        ]))
+        .map_err(|error| ConfigError::InvalidToml(error.to_string()))
+    }
+
     pub fn v1() -> Self {
         match Self::parse_toml(DEFAULT_CONFIG_TOML) {
             Ok(config) => config,

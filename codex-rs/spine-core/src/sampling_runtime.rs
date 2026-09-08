@@ -392,6 +392,27 @@ impl SamplingRuntime {
         Ok(())
     }
 
+    /// Builds a compacted successor without changing the live runtime. Hosts keep
+    /// source and sampling admission serialized until the checkpoint is durable,
+    /// then replace the live runtime with this successor.
+    pub fn prepare_compact(&self, barrier: SpineCompactBarrierV1) -> Result<Self, PlannerError> {
+        match self.state {
+            SamplingRuntimeState::Idle => {}
+            SamplingRuntimeState::Active(_) => return Err(PlannerError::SamplingAlreadyActive),
+            SamplingRuntimeState::Prepared { .. } => {
+                return Err(PlannerError::SamplingCommitPendingInstall);
+            }
+        }
+        let mut planner = self.planner.clone();
+        planner.compact(barrier)?;
+        Ok(Self {
+            planner,
+            next_attempt: self.next_attempt,
+            next_commit: self.next_commit,
+            state: SamplingRuntimeState::Idle,
+        })
+    }
+
     pub fn compact(
         &mut self,
         barrier: SpineCompactBarrierV1,

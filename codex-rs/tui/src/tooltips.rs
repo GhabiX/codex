@@ -387,7 +387,7 @@ mod tests {
             assert_eq!(paid_app_tooltip(), Some(tooltip));
         } else if IS_MACOS {
             let tooltip = tooltip.expect("macOS should advertise the desktop app");
-            insta::assert_snapshot!(tooltip, @"Run `codex app` to open the Desktop app (it installs on macOS if needed).");
+            insta::assert_snapshot!(tooltip, @"Run `spine-codex app` to open the Desktop app (it installs on macOS if needed).");
             assert_eq!(paid_app_tooltip(), Some(APP_TOOLTIP));
         } else if IS_WINDOWS {
             assert_eq!(tooltip, None);

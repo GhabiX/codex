@@ -283,13 +283,13 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
     if config.features.enabled(Feature::SpineSpawn) && config.features.enabled(Feature::SpineJit) {
         spine_features.push(spine_core::host::Feature::Spawn);
     }
-    config.spine_config = config
-        .spine_config
+    let sdk = config
+        .spine
+        .sdk()
         .clone()
         .with_features(spine_features)
         .expect("test Spine configuration");
-    config.spine_tools =
-        spine_core::host::ToolCatalog::new(&config.spine_config).expect("test Spine tool catalog");
+    config.spine = crate::config::SpineConfiguration::from_sdk(sdk).expect("test Spine tools");
     turn.config = Arc::new(config);
 }
 
@@ -356,7 +356,11 @@ async fn spine_tools_follow_feature_mode_and_source_boundaries() {
 
     let plan = probe(|turn| {
         set_spine_features(turn, &[Feature::SpineJit, Feature::SpineSpawn]);
-        turn.mode = ModeKind::Plan;
+        crate::session::tests::update_turn_settings_for_test(turn, |settings| {
+            crate::session::tests::update_selected_settings_for_test(settings, |selected| {
+                selected.collaboration_mode.mode = ModeKind::Plan;
+            });
+        });
     })
     .await;
     assert_eq!(
@@ -410,8 +414,7 @@ description = "{description}"
             ])
             .unwrap();
         let mut config = (*turn.config).clone();
-        config.spine_tools = spine_core::host::ToolCatalog::new(&spine_config).unwrap();
-        config.spine_config = spine_config;
+        config.spine = crate::config::SpineConfiguration::from_sdk(spine_config).unwrap();
         turn.config = Arc::new(config);
     })
     .await;

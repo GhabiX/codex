@@ -59,13 +59,21 @@ impl AgentControl {
         let mut failures = Vec::new();
         match state.get_thread(agent_id).await {
             Ok(thread) => {
-                thread.session.ensure_rollout_materialized().await;
+                thread
+                    .session
+                    .ensure_rollout_materialized(PersistContext::Standard)
+                    .await;
                 if let Err(error) = thread.session.flush_rollout().await {
                     failures.push(error.to_string());
                 }
                 if !matches!(thread.agent_status().await, AgentStatus::Shutdown)
                     && let Err(error) = state
-                        .send_op(agent_id, Op::Shutdown {}, /*parent_turn_id*/ None)
+                        .send_op(
+                            agent_id,
+                            Op::Shutdown {},
+                            /*parent_turn_id*/ None,
+                            /*root_turn_id*/ None,
+                        )
                         .await
                 {
                     failures.push(error.to_string());

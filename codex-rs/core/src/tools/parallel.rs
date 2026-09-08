@@ -448,6 +448,9 @@ impl ToolCallRuntime {
         let router = &self.step_context.tool_router;
         let supports_parallel = router.tool_supports_parallel(&call);
         let tool_runtime = router.tool_runtime(&call.tool_name);
+        let waits_for_runtime_cancellation = tool_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.waits_for_runtime_cancellation());
         let router = Arc::clone(router);
         let session = Arc::clone(&self.session);
         let step_context = Arc::clone(&self.step_context);
@@ -518,7 +521,7 @@ impl ToolCallRuntime {
             tokio::select! {
                 res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
                 _ = cancellation_token.cancelled() => {
-                    if terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
+                    if waits_for_runtime_cancellation || terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
                         dispatch_handle.await.map_err(Self::tool_task_join_error)?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
@@ -1012,6 +1015,7 @@ mod tests {
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::from_tools([handler]),
             Vec::new(),
+            /*spine_model_visible_spec*/ None,
             ToolMode::Direct,
             BTreeMap::new(),
             /*tool_namespaces_info*/ None,
@@ -1201,6 +1205,7 @@ mod tests {
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::from_tools([handler]),
             Vec::new(),
+            /*spine_model_visible_spec*/ None,
             ToolMode::Direct,
             BTreeMap::new(),
             /*tool_namespaces_info*/ None,

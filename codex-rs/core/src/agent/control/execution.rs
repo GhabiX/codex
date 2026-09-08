@@ -1,7 +1,6 @@
 use super::AgentControl;
 use crate::codex_thread::CodexThread;
 use codex_protocol::AgentPath;
-use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;

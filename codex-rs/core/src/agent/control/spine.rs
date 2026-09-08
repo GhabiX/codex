@@ -3,6 +3,7 @@ use std::time::Duration;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 
 use super::AgentControl;
@@ -28,18 +29,16 @@ impl AgentControl {
         thread_id: ThreadId,
         agent_path: &AgentPath,
         input: Vec<UserInput>,
-        parent_turn_id: Option<String>,
+        start_options: TurnStartOptions,
     ) -> CodexResult<String> {
-        let state = match self.upgrade() {
+        let _state = match self.upgrade() {
             Ok(state) => state,
             Err(error) => {
                 self.release_execution_reservation(agent_path);
                 return Err(error);
             }
         };
-        let result = self
-            .send_input_after_capacity_check(thread_id, &state, input, parent_turn_id)
-            .await;
+        let result = self.send_input(thread_id, input, start_options).await;
         if result.is_err() {
             self.release_execution_reservation(agent_path);
         }

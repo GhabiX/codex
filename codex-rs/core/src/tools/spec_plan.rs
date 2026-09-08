@@ -478,14 +478,16 @@ pub(crate) fn finalize_tool_router(
         &code_mode_tool_names,
         hosted_specs,
     )?;
+    let mut model_visible_specs = base_model_visible_specs.clone();
+    model_visible_specs.extend(spine_model_visible_spec.clone());
     let tool_namespaces_info = include_tool_namespaces_info
         .then(|| {
-            collect_tool_namespaces_info(&registry, &code_mode_tool_names, &base_model_visible_specs)
+            collect_tool_namespaces_info(&registry, &code_mode_tool_names, &model_visible_specs)
         })
         .filter(|info| !info.is_empty());
     let child_management_tools = required_child_management_tool_names(turn_context, model_info);
 
-    Ok(ToolRouter::from_parts_with_spine(
+    Ok(ToolRouter::from_parts(
         registry,
         base_model_visible_specs,
         spine_model_visible_spec,
@@ -1170,7 +1172,8 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
 
     let spine_tools = turn_context
         .config
-        .spine_tools
+        .spine
+        .tools()
         .clone()
         .with_spawn_max_items(
             turn_context

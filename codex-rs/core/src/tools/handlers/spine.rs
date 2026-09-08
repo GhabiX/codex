@@ -106,7 +106,10 @@ impl ToolExecutor<ToolInvocation> for SpineHandler {
         true
     }
 
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
         Box::pin(self.handle_call(invocation))
     }
 }
@@ -118,7 +121,7 @@ impl SpineHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
-            turn,
+            step_context,
             call_id,
             cancellation_token,
             payload,
@@ -127,7 +130,7 @@ impl SpineHandler {
         let origin = spine_core::host::ExecutionOrigin::Direct {
             execution_ref: call_id.clone(),
         };
-        if turn.collaboration_mode().mode == ModeKind::Plan {
+        if step_context.turn.collaboration_mode().mode == ModeKind::Plan {
             return Err(FunctionCallError::RespondToModel(
                 "Spine transitions are not allowed in Plan mode".to_string(),
             ));
@@ -173,7 +176,7 @@ impl SpineHandler {
                 .map_err(FunctionCallError::RespondToModel)?;
                 let (tasks, receipt) = crate::spine::spawn::execute(
                     session.clone(),
-                    turn,
+                    step_context,
                     call.call_id,
                     call.arguments,
                     cancellation_token,

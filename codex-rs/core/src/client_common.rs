@@ -58,7 +58,7 @@ impl Default for Prompt {
 
 impl Prompt {
     pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
-        let mut specs = self.tools.clone();
+        let mut specs = self.tools.to_vec();
         specs.extend(self.spine_tool.clone());
         specs
     }

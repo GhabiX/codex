@@ -16,15 +16,15 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::AgentStatus;
 use crate::agent::control::SpawnAgentBatchRequest;
-use crate::agent::control::SpawnAgentForkMode;
-use crate::agent::control::SpawnAgentOptions;
 use crate::config::Config;
 use crate::session::MailboxSubmissionCancellation;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::spine::spawn_gate::SpawnFailureAction;
 use crate::spine::spawn_gate::request_spawn_failure_action;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
+use codex_protocol::turn_input::TurnStartOptions;
 
 use super::correct_intermediate_messages;
 use super::error_result;
@@ -77,7 +77,7 @@ impl AttemptWait {
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn finish_transaction(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     call_id: String,
     tasks: Vec<SpawnTask>,
     cancellation_token: CancellationToken,
@@ -91,6 +91,7 @@ pub(super) async fn finish_transaction(
     progress_thread_ids: Arc<tokio::sync::Mutex<Vec<ThreadId>>>,
     progress_statuses: Arc<tokio::sync::Mutex<Vec<AgentStatus>>>,
 ) -> Result<SpawnReceipt, String> {
+    let turn = Arc::clone(&step_context.turn);
     let failure_gate_enabled = parent_path == AgentPath::root();
     let progress_tasks = Arc::new(tasks.clone());
     let progress_paths = Arc::new(child_paths.clone());
@@ -265,13 +266,7 @@ pub(super) async fn finish_transaction(
                         requests.push(
                             SpawnAgentBatchRequest::new(
                                 source,
-                                SpawnAgentOptions {
-                                    fork_parent_spawn_call_id: Some(call_id.clone()),
-                                    fork_mode: Some(SpawnAgentForkMode::FullHistoryAtSamplingStart),
-                                    parent_thread_id: Some(session.thread_id),
-                                    parent_turn_id: Some(turn.sub_id.clone()),
-                                    environments: Some(turn.environments.to_selections()),
-                                },
+                                super::spawn_options(&session, &step_context, &call_id, &config),
                             )
                             .suppress_parent_completion_notification(),
                         );
@@ -599,7 +594,12 @@ async fn continue_failed_branches(
                     ),
                     text_elements: Vec::new(),
                 }],
-                Some(turn.sub_id.clone()),
+                TurnStartOptions {
+                    parent_turn_id: Some(turn.sub_id.clone()),
+                    root_turn_id: turn.turn_metadata_state.root_turn_id(),
+                    cyber_access_program: turn.cyber_access_program,
+                    ..Default::default()
+                },
             )
             .await;
         match send_result {
@@ -675,7 +675,12 @@ async fn wait_for_attempts(
         let parent_path = parent_path.clone();
         let child_path = child_paths[wait.ordinal].clone();
         let parent_thread_id = session.thread_id;
-        let parent_turn_id = turn.sub_id.clone();
+        let start_options = TurnStartOptions {
+            parent_turn_id: Some(turn.sub_id.clone()),
+            root_turn_id: turn.turn_metadata_state.root_turn_id(),
+            cyber_access_program: turn.cyber_access_program,
+            ..Default::default()
+        };
         async move {
             let mut status = match wait.resume_status {
                 Some(status_rx) => {
@@ -684,7 +689,7 @@ async fn wait_for_attempts(
                         &parent_path,
                         &child_path,
                         parent_thread_id,
-                        parent_turn_id,
+                        start_options,
                         wait.thread_id,
                         status_rx,
                     )
@@ -696,7 +701,7 @@ async fn wait_for_attempts(
                         &parent_path,
                         &child_path,
                         parent_thread_id,
-                        parent_turn_id,
+                        start_options,
                         wait.thread_id,
                     )
                     .await

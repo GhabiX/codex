@@ -6,8 +6,9 @@ use crate::agent::next_thread_spawn_depth;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::session::MailboxSubmissionCancellation;
+use crate::session::multi_agents::resolve_usage_hints;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use crate::tools::handlers::multi_agents_common::build_agent_spawn_config;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use codex_protocol::AgentPath;
@@ -16,8 +17,10 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SpineSpawnProgressEvent;
 use codex_protocol::protocol::SpineSpawnTaskProgress;
+use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use futures::future::join_all;
 use spine_core::host::SPINE_SPAWN_RESULT_SCHEMA;
@@ -197,11 +200,12 @@ impl Drop for SpawnAbortBarrier {
 
 pub(crate) async fn execute(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     call_id: String,
     arguments: String,
     cancellation_token: CancellationToken,
 ) -> Result<(Vec<SpawnTask>, SpawnReceipt), String> {
+    let turn = &step_context.turn;
     let tasks = parse_tasks(&arguments)?;
     let max_tasks = turn
         .config
@@ -216,7 +220,7 @@ pub(crate) async fn execute(
     let transaction_tasks = tasks.clone();
     let receipt = tokio::spawn(execute_transaction(
         session,
-        turn,
+        step_context,
         call_id,
         transaction_tasks,
         cancellation_token,
@@ -272,11 +276,12 @@ fn validate_complete_child_inputs(tasks: &[SpawnTask]) -> Result<(), String> {
 
 async fn execute_transaction(
     session: Arc<Session>,
-    turn: Arc<TurnContext>,
+    step_context: Arc<StepContext>,
     call_id: String,
     tasks: Vec<SpawnTask>,
     cancellation_token: CancellationToken,
 ) -> Result<SpawnReceipt, String> {
+    let turn = Arc::clone(&step_context.turn);
     let transaction_guard = session
         .spine_spawn_lifecycle
         .try_enter(cancellation_token.clone())
@@ -287,12 +292,19 @@ async fn execute_transaction(
         return Err("spine.spawn was cancelled before child creation".to_string());
     }
 
-    let config = build_agent_spawn_config(
-        &session.get_base_instructions().await,
-        turn.as_ref(),
-        turn.environments.primary(),
-    )
-    .map_err(|error| error.to_string())?;
+    let mut config =
+        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())
+            .map_err(|error| error.to_string())?;
+    config.model = Some(step_context.settings.model_info.slug.clone());
+    config.model_reasoning_effort = step_context.settings.reasoning_effort().cloned();
+    config.model_reasoning_summary = Some(step_context.settings.reasoning_summary);
+    config.service_tier = step_context.settings.service_tier.clone();
+    config
+        .permissions
+        .approval_policy
+        .set(step_context.settings.approval_policy())
+        .map_err(|error| error.to_string())?;
+    config.approvals_reviewer = step_context.settings.approvals_reviewer();
     let child_depth = next_thread_spawn_depth(&turn.session_source);
     let parent_path = turn
         .session_source
@@ -316,13 +328,7 @@ async fn execute_transaction(
         requests.push(
             SpawnAgentBatchRequest::new(
                 source,
-                SpawnAgentOptions {
-                    fork_parent_spawn_call_id: Some(call_id.clone()),
-                    fork_mode: Some(SpawnAgentForkMode::FullHistoryAtSamplingStart),
-                    parent_thread_id: Some(session.thread_id),
-                    parent_turn_id: Some(turn.sub_id.clone()),
-                    environments: Some(turn.environments.to_selections()),
-                },
+                spawn_options(&session, &step_context, &call_id, &config),
             )
             .suppress_parent_completion_notification(),
         );
@@ -457,7 +463,7 @@ async fn execute_transaction(
 
     recovery::finish_transaction(
         session,
-        turn,
+        step_context,
         call_id,
         tasks,
         cancellation_token,
@@ -472,6 +478,40 @@ async fn execute_transaction(
         progress_statuses,
     )
     .await
+}
+
+fn spawn_options(
+    session: &Session,
+    step: &StepContext,
+    call_id: &str,
+    config: &crate::config::Config,
+) -> SpawnAgentOptions {
+    let turn = &step.turn;
+    let catalog = step
+        .settings
+        .model_info
+        .model_messages
+        .as_ref()
+        .and_then(|messages| messages.multi_agent.as_ref())
+        .and_then(|messages| messages.role.as_ref());
+    SpawnAgentOptions {
+        fork_parent_spawn_call_id: Some(call_id.to_string()),
+        fork_mode: Some(SpawnAgentForkMode::FullHistoryAtSamplingStart),
+        parent_thread_id: Some(session.thread_id),
+        parent_turn_id: Some(turn.sub_id.clone()),
+        root_turn_id: turn.turn_metadata_state.root_turn_id(),
+        environments: Some(step.environments.to_selections()),
+        cyber_access_program: turn.cyber_access_program,
+        multi_agent_v2_usage_hints: (turn.multi_agent_version == MultiAgentVersion::V2).then(
+            || {
+                resolve_usage_hints(
+                    &config.multi_agent_v2,
+                    catalog,
+                    !config.update_plan_enabled && config.model_catalog.is_none(),
+                )
+            },
+        ),
+    }
 }
 
 async fn teardown_transaction_children(
@@ -594,7 +634,10 @@ async fn correct_intermediate_messages(
             .services
             .agent_control
             .send_inter_agent_communication(
-                thread_id, correction, context, /*parent_turn_id*/ None,
+                thread_id,
+                correction,
+                context,
+                codex_protocol::turn_input::TurnStartOptions::default(),
             )
             .await;
     }
@@ -715,7 +758,7 @@ async fn wait_for_terminal(
     parent_path: &AgentPath,
     child_path: &AgentPath,
     parent_thread_id: ThreadId,
-    parent_turn_id: String,
+    start_options: TurnStartOptions,
     thread_id: ThreadId,
 ) -> AgentStatus {
     let Ok(mut status_rx) = control.subscribe_status(thread_id).await else {
@@ -743,7 +786,7 @@ async fn wait_for_terminal(
                         thread_id,
                         correction,
                         context,
-                        Some(parent_turn_id.clone()),
+                        start_options.clone(),
                     )
                     .await
                 {
@@ -888,7 +931,7 @@ async fn wait_for_terminal_after_resume(
     parent_path: &AgentPath,
     child_path: &AgentPath,
     parent_thread_id: ThreadId,
-    parent_turn_id: String,
+    start_options: TurnStartOptions,
     thread_id: ThreadId,
     mut status_rx: tokio::sync::watch::Receiver<AgentStatus>,
 ) -> AgentStatus {
@@ -917,7 +960,7 @@ async fn wait_for_terminal_after_resume(
                         thread_id,
                         correction,
                         context,
-                        Some(parent_turn_id.clone()),
+                        start_options.clone(),
                     )
                     .await
                 {

@@ -2,9 +2,9 @@ use super::execution::AgentExecutionReservation;
 use super::residency::V2ResidencySlot;
 use super::residency::is_v2_resident_session_source;
 use super::*;
+use crate::agent::registry::SpawnReservation;
 use crate::agent::role::apply_role_to_config;
 use crate::codex_thread::CodexThread;
-use crate::agent::registry::SpawnReservation;
 use crate::config::PermissionProfileSnapshot;
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
@@ -20,8 +20,8 @@ use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
-use codex_utils_path_uri::PathUri;
 use codex_thread_store::ForkBoundary;
+use codex_utils_path_uri::PathUri;
 
 const AGENT_NAMES: &str = include_str!("../../../assets/agent/agent_names.txt");
 
@@ -520,14 +520,8 @@ impl AgentControl {
         let stored_reasoning_effort = stored_thread.reasoning_effort.clone();
         let stored_source = stored_thread.source.clone();
         let stored_parent_thread_id = stored_thread.parent_thread_id;
-        let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
-            .await?
-            .ok_or(CodexErr::ThreadNotFound(thread_id))?;
-        let initial_history = InitialHistory::Resumed(ResumedHistory {
-            conversation_id: thread_id,
-            history: Arc::new(history),
-            rollout_path: stored_thread.rollout_path,
-        });
+        let initial_history =
+            InitialHistory::Resumed(state.load_resumed_history(&stored_thread).await?);
         if initial_history.get_multi_agent_version() != Some(MultiAgentVersion::V2) {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
@@ -1099,9 +1093,26 @@ impl AgentControl {
         // A regular full-history fork taken while its parent is mid-sampling must use the
         // same durable boundary as Spine Spawn. The paginated model-context snapshot can
         // contain only a projection of the canonical source and cannot seed child replay.
+        let needs_spine_checkpoint = parent_thread.session.has_pending_spine_sampling()
+            && (matches!(fork_mode, SpawnAgentForkMode::LastNTurns(_))
+                || *fork_mode == SpawnAgentForkMode::FullHistory
+                    && subagent_developer_instructions.is_some());
+        let checkpoint_prefix = if needs_spine_checkpoint {
+            Some(
+                state
+                    .prepare_fork(
+                        parent_thread_id,
+                        ForkBoundary::ThroughLatestSpineSamplingStarted,
+                    )
+                    .await?,
+            )
+        } else {
+            None
+        };
         let fork_at_sampling_start = fork_mode == &SpawnAgentForkMode::FullHistoryAtSamplingStart
             || fork_mode == &SpawnAgentForkMode::FullHistory
-                && parent_thread.session.has_pending_spine_sampling();
+                && parent_thread.session.has_pending_spine_sampling()
+                && !needs_spine_checkpoint;
         if fork_at_sampling_start {
             let mut thread_extension_init = ExtensionDataInit::new();
             match parent_history_mode {
@@ -1208,14 +1219,16 @@ impl AgentControl {
 
         let destination_history_mode = matches!(parent_history_mode, ThreadHistoryMode::Paginated)
             .then_some(ThreadHistoryMode::Paginated);
-        let mut forked_rollout_items =
-            load_agent_model_context(state, parent_thread_id, parent_history_mode)
+        let mut forked_rollout_items = match &checkpoint_prefix {
+            Some(prepared) => prepared.model_context.as_ref().clone(),
+            None => load_agent_model_context(state, parent_thread_id, parent_history_mode)
                 .await?
                 .ok_or_else(|| {
                     CodexErr::Fatal(format!(
                         "parent thread history unavailable for fork: {parent_thread_id}"
                     ))
-                })?;
+                })?,
+        };
 
         let selected_capability_roots = forked_rollout_items
             .iter()
@@ -1415,6 +1428,17 @@ impl AgentControl {
                 subagent_usage_hint_message.into(),
             ));
         }
+        if let Some(prepared) = &checkpoint_prefix {
+            let prefix = prepared.complete_history.as_deref().ok_or_else(|| {
+                CodexErr::Fatal(
+                    "Spine fork checkpoint requires complete source lineage".to_string(),
+                )
+            })?;
+            forked_rollout_items = parent_thread
+                .session
+                .checkpoint_spine_fork_context(prefix, &forked_rollout_items)
+                .await;
+        }
         let mut thread_extension_init = ExtensionDataInit::new();
         thread_extension_init.insert(selected_capability_roots);
 
@@ -1535,14 +1559,8 @@ impl AgentControl {
             .map_err(|err| CodexErr::InvalidRequest(format!("invalid stored agent path: {err}")))?;
         let resumed_agent_nickname = stored_thread.agent_nickname.clone();
         let resumed_agent_role = stored_thread.agent_role.clone();
-        let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
-            .await?
-            .ok_or(CodexErr::ThreadNotFound(thread_id))?;
-        let initial_history = InitialHistory::Resumed(ResumedHistory {
-            conversation_id: thread_id,
-            history: Arc::new(history),
-            rollout_path: stored_thread.rollout_path,
-        });
+        let initial_history =
+            InitialHistory::Resumed(state.load_resumed_history(&stored_thread).await?);
         let parent_thread_id = stored_thread.parent_thread_id;
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(

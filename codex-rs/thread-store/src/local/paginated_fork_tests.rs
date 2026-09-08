@@ -2,14 +2,14 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_history::RolloutItem;
+use codex_history::RolloutLine;
+use codex_history::SpineSamplingStartedItem;
+use codex_history::SpineTransitionItem;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HistoryPosition;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::SpineSamplingStartedItem;
-use codex_protocol::protocol::SpineTransitionItem;
 use codex_protocol::protocol::ThreadHistoryMode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -18,6 +18,66 @@ use tempfile::TempDir;
 use super::find_spine_sampling_boundary;
 use crate::local::rollout_lineage::RolloutLineage;
 use crate::local::rollout_lineage::RolloutLineageSegment;
+
+#[tokio::test]
+async fn sampling_boundary_preserves_decimal_rate_limits() {
+    let home = TempDir::new().expect("temp dir");
+    let thread_id = ThreadId::new();
+    let rate_limits: RolloutItem = serde_json::from_value(json!({
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": null,
+            "rate_limits": {
+                "primary": {
+                    "used_percent": 28.0,
+                    "window_minutes": 10080,
+                    "resets_at": 1789200718
+                }
+            }
+        }
+    }))
+    .expect("rate limit event");
+    let started = sampling_started("open");
+    let path = write_rollout(
+        home.path(),
+        thread_id,
+        /*history_base*/ None,
+        /*session_meta_ordinal*/ 0,
+        vec![rate_limits.clone(), started.clone()],
+    );
+    let expected_position = HistoryPosition {
+        thread_id,
+        end_ordinal_exclusive: 3,
+        end_byte_offset: fs::metadata(&path).expect("rollout metadata").len(),
+    };
+    let session_meta = codex_rollout::read_session_meta_line(&path)
+        .await
+        .expect("session metadata");
+    let lineage = RolloutLineage {
+        segments: vec![RolloutLineageSegment {
+            rollout_id: thread_id,
+            rollout_path: path,
+            start_ordinal: 1,
+            end: None,
+        }],
+    };
+
+    let selected = find_spine_sampling_boundary(&lineage)
+        .await
+        .expect("select sampling boundary after rate limit event");
+
+    assert_eq!(selected.position, expected_position);
+    assert_eq!(
+        serde_json::to_value(selected.complete_history.as_ref()).expect("selected history"),
+        serde_json::to_value(vec![
+            RolloutItem::SessionMeta(session_meta),
+            rate_limits,
+            started
+        ])
+        .expect("expected history")
+    );
+}
 
 #[tokio::test]
 async fn selects_latest_uncommitted_sampling_boundary_across_lineage() {
@@ -54,13 +114,13 @@ async fn selects_latest_uncommitted_sampling_boundary_across_lineage() {
     let lineage = RolloutLineage {
         segments: vec![
             RolloutLineageSegment {
-                thread_id: root_id,
+                rollout_id: root_id,
                 rollout_path: root_path,
                 start_ordinal: 1,
                 end: Some(root_end),
             },
             RolloutLineageSegment {
-                thread_id: child_id,
+                rollout_id: child_id,
                 rollout_path: child_path,
                 start_ordinal: 7,
                 end: None,
@@ -111,13 +171,13 @@ async fn selects_open_sampling_boundary_from_ancestor_segment() {
     let lineage = RolloutLineage {
         segments: vec![
             RolloutLineageSegment {
-                thread_id: root_id,
+                rollout_id: root_id,
                 rollout_path: root_path,
                 start_ordinal: 1,
                 end: Some(root_end),
             },
             RolloutLineageSegment {
-                thread_id: child_id,
+                rollout_id: child_id,
                 rollout_path: child_path,
                 start_ordinal: 5,
                 end: None,
@@ -147,7 +207,7 @@ async fn rejects_missing_or_committed_sampling_boundary() {
         let path = write_rollout(home.path(), thread_id, /*history_base*/ None, 0, items);
         let lineage = RolloutLineage {
             segments: vec![RolloutLineageSegment {
-                thread_id,
+                rollout_id: thread_id,
                 rollout_path: path,
                 start_ordinal: 1,
                 end: None,
@@ -233,6 +293,8 @@ fn event_item() -> RolloutItem {
 
 fn sampling_started(label: &str) -> RolloutItem {
     RolloutItem::SpineSamplingStarted(SpineSamplingStartedItem {
+        sdk_config: None,
+        replay_seed: None,
         version: 1,
         payload: json!({ "label": label }),
     })

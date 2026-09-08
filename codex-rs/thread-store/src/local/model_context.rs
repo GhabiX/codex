@@ -1,7 +1,6 @@
 use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::protocol::HistoryPosition;
@@ -44,7 +43,7 @@ pub(super) async fn load_latest_model_context(
 ) -> ThreadStoreResult<StoredModelContext> {
     let (path, session_meta) = resolve_rollout_source(store, &params).await?;
 
-    let items = if uses_paginated_lineage(path.as_path(), &session_meta) {
+    let items = if matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated) {
         let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
         scan_model_context_from_lineage(lineage, session_meta).await?
     } else {
@@ -67,7 +66,7 @@ pub(super) async fn load_complete_history(
     params: LoadThreadHistoryParams,
 ) -> ThreadStoreResult<StoredThreadHistory> {
     let (path, session_meta) = resolve_rollout_source(store, &params).await?;
-    let items = if uses_paginated_lineage(path.as_path(), &session_meta) {
+    let items = if matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated) {
         let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
         load_complete_history_from_lineage(lineage, session_meta).await?
     } else {
@@ -126,11 +125,18 @@ async fn resolve_rollout_source(
     store: &LocalThreadStore,
     params: &LoadThreadHistoryParams,
 ) -> ThreadStoreResult<(PathBuf, SessionMetaLine)> {
-    let path = read_thread::resolve_rollout_path(store, params.thread_id, params.include_archived)
-        .await?
-        .ok_or_else(|| ThreadStoreError::InvalidRequest {
-            message: format!("no rollout found for thread id {}", params.thread_id),
-        })?;
+    let resolved = if params.include_archived {
+        thread_rollout_resolver::resolve_current_including_archived(store, params.thread_id).await?
+    } else {
+        thread_rollout_resolver::resolve_current(store, params.thread_id).await?
+    };
+    let path =
+        resolved
+            .map(|resolved| resolved.path)
+            .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                message: format!("no rollout found for thread id {}", params.thread_id),
+            })?;
+
     let session_meta = codex_rollout::read_session_meta_line(path.as_path())
         .await
         .map_err(|err| ThreadStoreError::Internal {
@@ -147,14 +153,6 @@ async fn resolve_rollout_source(
         });
     }
     Ok((path, session_meta))
-}
-
-fn uses_paginated_lineage(path: &Path, session_meta: &SessionMetaLine) -> bool {
-    matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated)
-        && !path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.ends_with(".jsonl.zst"))
 }
 
 async fn scan_model_context_from_lineage(
@@ -195,14 +193,13 @@ fn load_complete_history_from_lineage_blocking(
 ) -> ThreadStoreResult<Vec<RolloutItem>> {
     let mut items = vec![RolloutItem::SessionMeta(session_meta)];
     for segment in lineage.segments() {
-        let file = File::open(segment.rollout_path.as_path()).map_err(|err| {
-            ThreadStoreError::Internal {
+        let file = codex_rollout::open_rollout_seekable_reader(segment.rollout_path.as_path())
+            .map_err(|err| ThreadStoreError::Internal {
                 message: format!(
                     "failed to open complete lineage {}: {err}",
                     segment.rollout_path.display()
                 ),
-            }
-        })?;
+            })?;
         let end_byte_offset = match segment.end {
             Some(end) => end.end_byte_offset,
             None => file

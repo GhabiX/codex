@@ -4484,7 +4484,7 @@ fn mcp_init_error_display_identifies_oauth_reauthentication() {
     .expect("executor MCP configuration should deserialize");
 
     for (config, recovery_hint) in [
-        (None, "Run `codex mcp login example`."),
+        (None, "Run `spine-codex mcp login example`."),
         (
             Some(&executor_config),
             "Use your client's MCP OAuth sign-in flow.",

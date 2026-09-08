@@ -11,9 +11,7 @@ fn compatibility_user_agent_uses_upstream_version_segment() {
             ),
             "0.147.0",
         ),
-        format!(
-            "client/0.147.0 (Linux 6.8.0; x86_64) codex_cli_rs/{product_version}"
-        ),
+        format!("client/0.147.0 (Linux 6.8.0; x86_64) codex_cli_rs/{product_version}"),
     );
 }
 

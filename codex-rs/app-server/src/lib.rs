@@ -1370,7 +1370,7 @@ fn loader_overrides_with_test_user_config_file(
             );
             loader_overrides.user_config_path = Some(path);
         }
-        return Ok(loader_overrides);
+        Ok(loader_overrides)
     }
 
     #[cfg(not(debug_assertions))]

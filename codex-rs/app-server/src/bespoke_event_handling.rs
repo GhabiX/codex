@@ -1233,42 +1233,61 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
 
             if let Some(request_id) = pending {
-                let response = match thread_list_state_permit.acquire().await {
-                    Ok(_thread_list_state_permit) => {
-                        let fallback_cwd = conversation.config_snapshot().await.cwd().clone();
-                        match conversation
-                            .read_thread(
-                                /*include_archived*/ true, /*include_history*/ true,
+                let _thread_list_state_permit = match thread_list_state_permit.acquire().await {
+                    Ok(permit) => permit,
+                    Err(err) => {
+                        outgoing
+                            .send_error(
+                                request_id,
+                                internal_error(format!(
+                                    "failed to acquire thread list state permit: {err}"
+                                )),
                             )
-                            .await
-                        {
-                            Ok(stored_thread) => {
-                                let loaded_status = thread_watch_manager
-                                    .loaded_status_for_thread(&conversation_id.to_string())
-                                    .await;
-                                thread_rollback_response_from_stored_thread(
-                                    stored_thread,
-                                    conversation.session_configured().session_id.to_string(),
-                                    fallback_model_provider.as_str(),
-                                    &fallback_cwd,
-                                    loaded_status,
-                                )
-                            }
-                            Err(err) => Err(format!(
-                                "failed to read thread {conversation_id} after rollback: {err}"
-                            )),
-                        }
+                            .await;
+                        return;
                     }
-                    Err(err) => Err(format!("failed to acquire thread list state permit: {err}")),
+                };
+                let config_snapshot = conversation.config_snapshot().await;
+                let stored_thread = match conversation
+                    .read_thread(
+                        /*include_archived*/ true, /*include_history*/ true,
+                    )
+                    .await
+                {
+                    Ok(stored_thread) => stored_thread,
+                    Err(err) => {
+                        outgoing
+                            .send_error(
+                                request_id.clone(),
+                                internal_error(format!(
+                                    "failed to read thread {conversation_id} after rollback: {err}"
+                                )),
+                            )
+                            .await;
+                        return;
+                    }
+                };
+                let loaded_status = thread_watch_manager
+                    .loaded_status_for_thread(&conversation_id.to_string())
+                    .await;
+                let mut response = match thread_rollback_response_from_stored_thread(
+                    stored_thread,
+                    conversation.session_configured().session_id.to_string(),
+                    fallback_model_provider.as_str(),
+                    config_snapshot.cwd(),
+                    loaded_status,
+                ) {
+                    Ok(response) => response,
+                    Err(err) => {
+                        outgoing
+                            .send_error(request_id.clone(), internal_error(err))
+                            .await;
+                        return;
+                    }
                 };
 
-                match response {
-                    Ok(mut response) => {
-                        apply_live_model_settings(&mut response.thread, &conversation.config_snapshot().await);
-                        outgoing.send_response(request_id, response).await;
-                    }
-                    Err(err) => outgoing.send_error(request_id, internal_error(err)).await,
-                }
+                apply_live_model_settings(&mut response.thread, &config_snapshot);
+                outgoing.send_response(request_id, response).await;
             }
             outgoing
                 .send_server_notification(ServerNotification::ThreadRolledBack(

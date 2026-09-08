@@ -4,7 +4,7 @@ use codex_features::Features;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn trusted_workspace_layers_override_home_configuration() -> std::io::Result<()> {
+fn trusted_workspace_layers_override_home_configuration() -> anyhow::Result<()> {
     let home = tempfile::tempdir()?;
     let working = tempfile::tempdir()?;
     std::fs::create_dir_all(home.path().join(".spine"))?;
@@ -22,6 +22,7 @@ fn trusted_workspace_layers_override_home_configuration() -> std::io::Result<()>
     let managed = ManagedFeatures::from(host_features);
     let (config, _) = load(
         /*path*/ None,
+        /*snapshot*/ None,
         working.path(),
         Some(home.path()),
         &managed,
@@ -33,7 +34,7 @@ fn trusted_workspace_layers_override_home_configuration() -> std::io::Result<()>
 }
 
 #[test]
-fn untrusted_workspace_layers_are_not_loaded() -> std::io::Result<()> {
+fn untrusted_workspace_layers_are_not_loaded() -> anyhow::Result<()> {
     let working = tempfile::tempdir()?;
     let baseline_working = tempfile::tempdir()?;
     std::fs::write(
@@ -46,6 +47,7 @@ fn untrusted_workspace_layers_are_not_loaded() -> std::io::Result<()> {
     let managed = ManagedFeatures::from(host_features);
     let (config, _) = load(
         /*path*/ None,
+        /*snapshot*/ None,
         working.path(),
         /*home_directory*/ None,
         &managed,
@@ -53,6 +55,7 @@ fn untrusted_workspace_layers_are_not_loaded() -> std::io::Result<()> {
     )?;
     let (baseline, _) = load(
         /*path*/ None,
+        /*snapshot*/ None,
         baseline_working.path(),
         /*home_directory*/ None,
         &managed,
@@ -70,6 +73,7 @@ fn explicit_configuration_is_required_even_for_untrusted_workspace() {
 
     let error = load(
         Some(&missing),
+        /*snapshot*/ None,
         working.path(),
         /*home_directory*/ None,
         &ManagedFeatures::default(),
@@ -77,7 +81,13 @@ fn explicit_configuration_is_required_even_for_untrusted_workspace() {
     )
     .unwrap_err();
 
-    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(
+        error
+            .downcast_ref::<io::Error>()
+            .expect("filesystem error")
+            .kind(),
+        std::io::ErrorKind::NotFound
+    );
 }
 
 #[test]
@@ -90,6 +100,7 @@ fn managed_host_features_select_sdk_features() {
 
     let (config, _) = load(
         /*path*/ None,
+        /*snapshot*/ None,
         working.path(),
         /*home_directory*/ None,
         &managed,
@@ -104,4 +115,23 @@ fn managed_host_features_select_sdk_features() {
         ),
         (true, true),
     );
+}
+
+fn load(
+    path: Option<&AbsolutePathBuf>,
+    snapshot: Option<&SpineConfigLockToml>,
+    working_directory: &Path,
+    home_directory: Option<&Path>,
+    features: &ManagedFeatures,
+    project_config_trusted: bool,
+) -> anyhow::Result<(SpineConfig, ToolCatalog)> {
+    let resolved = SpineConfiguration::pending(
+        path,
+        snapshot,
+        working_directory,
+        home_directory,
+        project_config_trusted,
+    )
+    .resolve(/*saved*/ None, features)?;
+    Ok((resolved.sdk().clone(), resolved.tools().clone()))
 }

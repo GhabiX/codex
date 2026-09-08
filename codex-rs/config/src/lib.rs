@@ -30,6 +30,7 @@ mod requirements_layers;
 pub mod schema;
 mod shell_environment_policy;
 mod skills_config;
+pub mod spine_snapshot;
 mod state;
 mod strict_config;
 pub mod test_support;

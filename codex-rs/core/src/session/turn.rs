@@ -365,7 +365,7 @@ pub(crate) async fn run_turn(
                 .await?
             }
         };
-        let sampling_request_result: CodexResult<_> = async {
+        let sampling_request_result: Result<SamplingRequestSuccess, CodexErr> = async {
             super::time_reminder::maybe_record_current_time_reminder(
                 sess.as_ref(),
                 turn_context.as_ref(),
@@ -379,7 +379,7 @@ pub(crate) async fn run_turn(
 
             // Construct the input that we will send to the model.
             let sampling_request_input: Vec<ResponseItem> = async {
-                sess.clone_history()
+                sess.clone_model_context()
                     .await
                     .for_prompt(&step_context.settings.model_info.input_modalities)
             }
@@ -403,7 +403,10 @@ pub(crate) async fn run_turn(
         }
         .await;
         match sampling_request_result {
-            Ok((sampling_request_output, sampling_request_input)) => {
+            Ok(SamplingRequestSuccess {
+                output: sampling_request_output,
+                original_input: sampling_request_input,
+            }) => {
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -571,16 +574,11 @@ pub(crate) async fn run_turn(
                 }
                 continue;
             }
-            Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
-                return Err(err);
+            Err(error) if matches!(error.details(), CodexErrorDetails::TurnAborted) => {
+                return Err(error);
             }
-            Err(codex_error)
-                if matches!(
-                    codex_error.details(),
-                    CodexErrorDetails::InvalidImageRequest()
-                ) =>
-            {
-                sess.track_turn_codex_error(turn_context.as_ref(), &codex_error);
+            Err(error) if matches!(error.details(), CodexErrorDetails::InvalidImageRequest()) => {
+                sess.track_turn_codex_error(turn_context.as_ref(), &error);
                 let error = CodexErrorInfo::BadRequest;
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                     .await;
@@ -1358,7 +1356,8 @@ pub(crate) fn build_prompt(
     let turn_context = &step_context.turn;
     Prompt {
         input,
-        tools: step_context.tool_router.model_visible_specs(),
+        tools: step_context.tool_router.base_model_visible_specs(),
+        spine_tool: step_context.tool_router.spine_model_visible_spec(),
         parallel_tool_calls: true,
         base_instructions,
         output_schema: turn_context.final_output_json_schema.clone(),
@@ -1388,7 +1387,7 @@ async fn run_sampling_request(
     responses_metadata: &CodexResponsesMetadata,
     input: Vec<ResponseItem>,
     cancellation_token: CancellationToken,
-) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
+) -> Result<SamplingRequestSuccess, CodexErr> {
     let turn_context = Arc::clone(&step_context.turn);
     let base_instructions = sess.get_prompt_base_instructions().await;
 
@@ -1411,7 +1410,7 @@ async fn run_sampling_request(
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
-            sess.clone_history()
+            sess.clone_model_context()
                 .await
                 .for_prompt(&step_context.settings.model_info.input_modalities)
         };
@@ -1428,7 +1427,7 @@ async fn run_sampling_request(
             base_instructions.clone(),
         );
         let err = match try_run_sampling_request(
-            tool_runtime.clone(),
+            tool_runtime.for_sampling_attempt(),
             Arc::clone(&sess),
             Arc::clone(&step_context),
             Arc::clone(&turn_store),
@@ -1441,7 +1440,10 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
-                return Ok((output, original_input.unwrap_or(prompt.input)));
+                return Ok(SamplingRequestSuccess {
+                    output,
+                    original_input: original_input.unwrap_or(prompt.input),
+                });
             }
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
@@ -1460,14 +1462,14 @@ async fn run_sampling_request(
         };
 
         if original_input.is_none() {
-            original_input = Some(prompt.input);
+            original_input = Some(prompt.input.clone());
         }
 
         if !err.is_retryable() {
             return Err(err);
         }
 
-        handle_retryable_response_stream_error(
+        if let Err(error) = handle_retryable_response_stream_error(
             &mut retry_state,
             max_retries,
             err,
@@ -1476,9 +1478,17 @@ async fn run_sampling_request(
             &turn_context,
             ResponsesStreamRequest::Sampling,
         )
-        .await?;
+        .await
+        {
+            return Err(error);
+        }
         turn_context.turn_timing_state.record_sampling_retry();
     }
+}
+
+struct SamplingRequestSuccess {
+    output: SamplingRequestResult,
+    original_input: Vec<ResponseItem>,
 }
 
 pub(crate) struct PreparedToolRecommendations {
@@ -1893,7 +1903,9 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
         | EventMsg::CollabResumeEnd(_)
-        | EventMsg::SubAgentActivity(_) => None,
+        | EventMsg::SubAgentActivity(_)
+        | EventMsg::SpineTreeUpdate(_)
+        | EventMsg::SpineSpawnProgress(_) => None,
     }
 }
 
@@ -2256,6 +2268,10 @@ async fn try_run_sampling_request(
         .features
         .enabled(Feature::ConcurrentReasoningSummaries)
         && turn_context.provider.info().is_openai();
+    let mut spine_sampling_attempt = sess
+        .begin_spine_sampling(&prompt.input)
+        .await
+        .map_err(|error| CodexErr::Fatal(error.to_string()))?;
     let mut stream = client_session
         .stream(
             prompt,
@@ -2280,6 +2296,7 @@ async fn try_run_sampling_request(
     )> = None;
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
+    let mut confirmed_input_tokens = None;
     const MAX_ANALYTICS_TOOL_CALL_IDS_PER_RESPONSE: usize = 256;
     let mut analytics_tool_call_ids = Vec::new();
     let reasoning_effort = step_context
@@ -2594,6 +2611,7 @@ async fn try_run_sampling_request(
                 usage_metadata,
                 end_turn,
             } => {
+                confirmed_input_tokens = token_usage.as_ref().map(|usage| usage.input_tokens);
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(
@@ -2783,6 +2801,7 @@ async fn try_run_sampling_request(
             }
         }
     };
+    tool_runtime.finish_response_group();
     drop(sampling_timing_guard);
 
     flush_assistant_text_segments_all(
@@ -2800,6 +2819,24 @@ async fn try_run_sampling_request(
     };
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
     drop(tool_blocking_timing_guard);
+
+    let terminal = if cancellation_token.is_cancelled() {
+        spine_core::host::SamplingTerminal::Cancelled
+    } else if outcome.is_ok() {
+        spine_core::host::SamplingTerminal::Completed
+    } else {
+        spine_core::host::SamplingTerminal::Failed
+    };
+    if let Some(attempt) = spine_sampling_attempt.take()
+        && let Err(error) = sess
+            .finish_spine_sampling_with_input_tokens(attempt, terminal, confirmed_input_tokens)
+            .await
+    {
+        let reason = error.to_string();
+        sess.latch_spine_durability_fault(reason.clone());
+        tracing::error!(%reason, "failed to commit canonical Spine sampling");
+        return Err(CodexErr::Fatal(reason));
+    }
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token

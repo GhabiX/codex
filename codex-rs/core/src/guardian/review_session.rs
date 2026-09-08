@@ -1596,6 +1596,20 @@ pub(crate) fn build_guardian_review_session_config(
             );
         }
     }
+    let mut review_features = guardian_config.features.get().clone();
+    for feature in [
+        Feature::SpineJit,
+        Feature::SpineSpawn,
+        Feature::SpinetreeMemoryProjection,
+    ] {
+        review_features.disable(feature);
+    }
+    guardian_config.features =
+        ManagedFeatures::from_configured(review_features, /*feature_requirements*/ None).map_err(
+            |err| {
+                anyhow::anyhow!("guardian review session could not isolate Spine features: {err}")
+            },
+        )?;
     Ok(guardian_config)
 }
 

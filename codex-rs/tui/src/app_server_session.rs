@@ -2113,6 +2113,7 @@ async fn thread_session_state_from_thread_start_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
+        response.spine_feedback_enabled,
         config,
     )
     .await
@@ -2154,6 +2155,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
+        response.spine_feedback_enabled,
         config,
     )
     .await
@@ -2186,6 +2188,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.runtime_workspace_roots.clone(),
         response.instruction_source_path_uris(),
         response.reasoning_effort.clone(),
+        response.spine_feedback_enabled,
         config,
     )
     .await
@@ -2236,6 +2239,7 @@ async fn thread_session_state_from_thread_response(
     runtime_workspace_roots: Vec<AbsolutePathBuf>,
     instruction_source_paths: Vec<PathUri>,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    spine_feedback_enabled: Option<bool>,
     config: &Config,
 ) -> Result<ThreadSessionState, String> {
     let thread_id = ThreadId::from_string(thread_id)
@@ -2270,6 +2274,7 @@ async fn thread_session_state_from_thread_response(
             log_id,
             entry_count,
         }),
+        spine_feedback_enabled,
         network_proxy: None,
         rollout_path,
     })
@@ -3687,6 +3692,7 @@ mod tests {
             model: "gpt-5.4".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
+            spine_feedback_enabled: None,
             cwd: test_path_buf("/tmp/project").abs(),
             runtime_workspace_roots: vec![
                 test_path_buf("/tmp/project").abs(),
@@ -3838,6 +3844,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
+            /*spine_feedback_enabled*/ Some(false),
             &config,
         )
         .await
@@ -3873,6 +3880,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             /*reasoning_effort*/ None,
+            /*spine_feedback_enabled*/ Some(false),
             &config,
         )
         .await

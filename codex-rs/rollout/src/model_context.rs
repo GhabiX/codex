@@ -161,7 +161,9 @@ impl ModelContextScan {
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::RealtimeItem(_)
             | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::TokenUsageRecord(_) => {}
+            | RolloutItem::TokenUsageRecord(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => {}
         }
 
         if self.has_bounded_cutoff() {

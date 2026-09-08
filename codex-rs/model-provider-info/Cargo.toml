@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 codex-api = { workspace = true }
+codex-install-context = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-redacted-string = { workspace = true }
 http = { workspace = true }

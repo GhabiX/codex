@@ -1006,3 +1006,57 @@ async fn interrupt_and_drain_turn_ignores_prior_turn_completion() {
 
     assert!(review_session.io.rx_event.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn guardian_review_session_config_forces_spine_features_off() {
+    use codex_config::FeatureRequirementsToml;
+    use codex_config::RequirementSource;
+    use codex_config::Sourced;
+    use std::collections::BTreeMap;
+
+    let mut parent_config = crate::config::test_config().await;
+    let mut parent_features = parent_config.features.get().clone();
+    for feature in [
+        Feature::SpineJit,
+        Feature::SpineSpawn,
+        Feature::SpinetreeMemoryProjection,
+    ] {
+        parent_features.enable(feature);
+    }
+    parent_config.features = ManagedFeatures::from_configured(
+        parent_features,
+        Some(Sourced::new(
+            FeatureRequirementsToml {
+                entries: BTreeMap::from([
+                    ("spine_jit".to_string(), true),
+                    ("spine_spawn".to_string(), true),
+                    ("spinetree_memory_projection".to_string(), true),
+                ]),
+            },
+            RequirementSource::Unknown,
+        )),
+    )
+    .expect("parent config should allow Spine feature requirements");
+
+    let guardian_config = build_guardian_review_session_config(
+        &parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+        /*model_messages*/ None,
+    )
+    .expect("guardian config");
+
+    for feature in [
+        Feature::SpineJit,
+        Feature::SpineSpawn,
+        Feature::SpinetreeMemoryProjection,
+    ] {
+        assert!(parent_config.features.enabled(feature));
+        assert!(
+            !guardian_config.features.enabled(feature),
+            "guardian review session should force {} off",
+            feature.key()
+        );
+    }
+}

@@ -46,6 +46,16 @@ impl ChatWidget {
         };
         let mut flex = FlexRenderable::new();
         flex.push(/*flex*/ 1, active_cell_renderable);
+        if let Some(cell) = self.live_spine_tree_cell.as_ref() {
+            flex.push(
+                /*flex*/ 1,
+                RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
+                    child: cell,
+                    top: 1,
+                    right: active_cell_right_reserve,
+                })),
+            );
+        }
         if let Some(cell) = self.pending_token_activity_output() {
             flex.push(
                 /*flex*/ 1,
@@ -186,6 +196,13 @@ mod tests;
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(delay) = self
+            .live_spine_tree_cell
+            .as_ref()
+            .and_then(|cell| cell.next_frame_in(Instant::now()))
+        {
+            self.frame_requester.schedule_frame_in(delay);
+        }
         self.as_renderable().render(area, buf);
         self.note_rendered_width(area.width);
     }

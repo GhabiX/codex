@@ -399,6 +399,7 @@ async fn submission_preserves_text_elements_and_local_images() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -508,6 +509,7 @@ async fn submission_includes_configured_active_permission_profile() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -563,6 +565,7 @@ async fn submission_omits_active_permission_profile_for_legacy_snapshot() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -608,6 +611,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -706,6 +710,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -773,6 +778,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -814,6 +820,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -855,6 +862,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -899,6 +907,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };

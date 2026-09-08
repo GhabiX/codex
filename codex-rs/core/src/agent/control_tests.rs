@@ -279,7 +279,9 @@ async fn persisted_originator(thread: &CodexThread) -> String {
             | RolloutItem::RealtimeItem(_)
             | RolloutItem::SecurityRiskScore(_)
             | RolloutItem::TokenUsageRecord(_)
-            | RolloutItem::TurnContext(_) => None,
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => None,
         })
         .expect("session metadata should be persisted")
 }
@@ -1121,6 +1123,48 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
         .await
         .expect("thread should be registered");
     wait_for_recorded_user_message(thread.as_ref(), "spawned").await;
+}
+
+#[tokio::test]
+async fn dropping_prepared_spawn_batch_releases_all_admission_resources() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let control = parent_thread.session.services.agent_control.clone();
+    let path = AgentPath::try_from("/root/spine_drop").expect("child path");
+    let request = || {
+        SpawnAgentBatchRequest::new(
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(path.clone()),
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some("spine-spawn-drop".to_string()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistoryAtSamplingStart),
+                parent_thread_id: Some(parent_thread_id),
+                ..Default::default()
+            },
+        )
+    };
+    let prepared = control
+        .prepare_agent_spawn_batch(harness.config.clone(), vec![request()])
+        .await
+        .expect("prepare child");
+    assert!(control.state.live_agents().is_empty());
+    drop(prepared);
+
+    let replacement = control
+        .prepare_agent_spawn_batch(harness.config.clone(), vec![request()])
+        .await
+        .expect("dropped capability must release every reservation");
+    assert_eq!(replacement.len(), 1);
+    drop(replacement);
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown parent");
 }
 
 #[tokio::test]

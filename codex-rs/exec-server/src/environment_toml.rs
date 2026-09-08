@@ -351,7 +351,7 @@ mod tests {
                     program: Some(" ssh ".to_string()),
                     args: Some(vec![
                         "dev".to_string(),
-                        "codex exec-server --listen stdio".to_string(),
+                        "spine-codex exec-server --listen stdio".to_string(),
                     ]),
                     env: Some(HashMap::from([(
                         "CODEX_LOG".to_string(),
@@ -749,7 +749,7 @@ initialize_timeout_sec = 34.0
 [[environments]]
 id = "ssh-dev"
 program = "ssh"
-args = ["dev", "codex exec-server --listen stdio"]
+args = ["dev", "spine-codex exec-server --listen stdio"]
 cwd = "/tmp"
 [environments.env]
 CODEX_LOG = "debug"
@@ -781,7 +781,7 @@ CODEX_LOG = "debug"
                 program: Some("ssh".to_string()),
                 args: Some(vec![
                     "dev".to_string(),
-                    "codex exec-server --listen stdio".to_string(),
+                    "spine-codex exec-server --listen stdio".to_string(),
                 ]),
                 env: Some(HashMap::from([(
                     "CODEX_LOG".to_string(),

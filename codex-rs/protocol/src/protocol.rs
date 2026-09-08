@@ -65,6 +65,14 @@ use crate::turn_input::TurnInputRequest;
 use crate::turn_input::TurnInputSubmission;
 use crate::turn_input::TurnStartOptions;
 use codex_extension_items::image_generation::ImageGenerationFailure;
+pub use crate::spine_tree::SpineSpawnOutcome;
+pub use crate::spine_tree::SpineSpawnProgressEvent;
+pub use crate::spine_tree::SpineSpawnTaskProgress;
+pub use crate::spine_tree::SpineTreeNodeKind;
+pub use crate::spine_tree::SpineTreeNodeSnapshot;
+pub use crate::spine_tree::SpineTreeNodeStatus;
+pub use crate::spine_tree::SpineTreeUpdateEvent;
+use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
@@ -1521,6 +1529,12 @@ pub enum EventMsg {
     RealtimeConversationListVoicesResponse(RealtimeConversationListVoicesResponseEvent),
 
     PlanUpdate(UpdatePlanArgs),
+
+    /// Rollout-derived Spine tree snapshot for TUI and app-server consumers.
+    SpineTreeUpdate(SpineTreeUpdateEvent),
+
+    /// Live-only progress for an experimental `spine.spawn` transaction.
+    SpineSpawnProgress(SpineSpawnProgressEvent),
 
     TurnAborted(TurnAbortedEvent),
 
@@ -2991,6 +3005,35 @@ impl fmt::Display for InternalSessionSource {
     }
 }
 
+fn multi_agent_version_from_items(
+    items: &[RolloutItem],
+    thread_id: Option<ThreadId>,
+) -> Option<MultiAgentVersion> {
+    let session_meta_version = items.iter().rev().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line)
+            if thread_id.is_none_or(|thread_id| meta_line.meta.id == thread_id) =>
+        {
+            meta_line.meta.multi_agent_version
+        }
+        _ => None,
+    });
+
+    session_meta_version.or_else(|| {
+        items.iter().rev().find_map(|item| match item {
+            RolloutItem::TurnContext(turn_context) => turn_context.multi_agent_version,
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::InterAgentCommunication(_)
+            | RolloutItem::InterAgentCommunicationMetadata { .. }
+            | RolloutItem::Compacted(_)
+            | RolloutItem::WorldState(_)
+            | RolloutItem::EventMsg(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => None,
+        })
+    })
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -3165,6 +3208,39 @@ impl<'de> Deserialize<'de> for SessionMetaLine {
             serde_json::from_value(value).map_err(D::Error::custom)?;
         Ok(Self { meta, git })
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum RolloutItem {
+    SessionMeta(SessionMetaLine),
+    ResponseItem(ResponseItem),
+    /// Legacy delivery item reconstructed as a model-visible `agent_message`.
+    InterAgentCommunication(InterAgentCommunication),
+    /// Local delivery metadata that is not part of the Responses API item.
+    InterAgentCommunicationMetadata {
+        trigger_turn: bool,
+    },
+    Compacted(CompactedItem),
+    TurnContext(TurnContextItem),
+    WorldState(WorldStateItem),
+    EventMsg(EventMsg),
+    /// Durable pre-sampling boundary for canonical Spine replay.
+    SpineSamplingStarted(SpineSamplingStartedItem),
+    /// One successfully committed Spine sampling transition.
+    SpineTransition(SpineTransitionItem),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+pub struct SpineSamplingStartedItem {
+    pub version: u32,
+    pub payload: Value,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+pub struct SpineTransitionItem {
+    pub version: u32,
+    pub payload: Value,
 }
 
 /// Persisted comparison state used to resume model-visible world-state diffing.
@@ -4435,6 +4511,49 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
+
+    #[test]
+    fn spine_rollout_metadata_round_trips_with_stable_wire_shape() -> Result<()> {
+        let cases = [
+            (
+                RolloutItem::SpineSamplingStarted(SpineSamplingStartedItem {
+                    version: 1,
+                    payload: json!({"thread": "thread-1", "epoch": 3}),
+                }),
+                "spine_sampling_started",
+            ),
+            (
+                RolloutItem::SpineTransition(SpineTransitionItem {
+                    version: 1,
+                    payload: json!({"type": "sampling_shadow_v1", "record": {"digest": "abc"}}),
+                }),
+                "spine_transition",
+            ),
+        ];
+
+        for (item, item_type) in cases {
+            let encoded = serde_json::to_value(&item)?;
+            assert_eq!(
+                encoded,
+                json!({
+                    "type": item_type,
+                    "payload": {
+                        "version": 1,
+                        "payload": match &item {
+                            RolloutItem::SpineSamplingStarted(item) => item.payload.clone(),
+                            RolloutItem::SpineTransition(item) => item.payload.clone(),
+                            _ => unreachable!("fixture contains only Spine rollout metadata"),
+                        }
+                    }
+                })
+            );
+            assert_eq!(
+                serde_json::to_value(serde_json::from_value::<RolloutItem>(encoded)?)?,
+                serde_json::to_value(item)?
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn review_decision_denied_round_trip() -> Result<()> {

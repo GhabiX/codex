@@ -558,6 +558,7 @@ mod process_exec_processor;
 mod projects;
 mod remote_control_processor;
 mod search;
+mod spine_feedback_processor;
 mod thread_enrichment;
 mod thread_fork_goal;
 mod thread_input;

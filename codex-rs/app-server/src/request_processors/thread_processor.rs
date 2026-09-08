@@ -23,6 +23,7 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
+use codex_utils_cli::CLI_COMMAND;
 
 pub(super) const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 pub(super) const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -1497,6 +1498,11 @@ impl ThreadRequestProcessor {
         .await?;
 
         let instruction_sources = thread.legacy_instruction_sources().await;
+        let spine_feedback_enabled = listener_task_context
+            .thread_state_manager
+            .connection_experimental_api_enabled(request_id.connection_id)
+            .await
+            .then(|| super::spine_feedback_processor::spine_feedback_enabled(thread.as_ref()));
         let config_snapshot = thread
             .config_snapshot()
             .instrument(tracing::info_span!(
@@ -1564,6 +1570,7 @@ impl ThreadRequestProcessor {
             model: config_snapshot.model,
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
+            spine_feedback_enabled,
             cwd,
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
@@ -3939,6 +3946,8 @@ impl ThreadRequestProcessor {
                     /*has_live_in_progress_turn*/ false,
                 );
                 let config_snapshot = codex_thread.config_snapshot().await;
+                let spine_feedback_enabled =
+                    super::spine_feedback_processor::spine_feedback_enabled(codex_thread.as_ref());
                 let (turns_backwards_cursor, items_backwards_cursor) =
                     if matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated) {
                         match Self::paginated_resume_backwards_cursors(
@@ -4003,11 +4012,17 @@ impl ThreadRequestProcessor {
                 }
 
                 let thread_originator = config_snapshot.originator.clone();
+                let spine_feedback_enabled = self
+                    .thread_state_manager
+                    .connection_experimental_api_enabled(request_id.connection_id)
+                    .await
+                    .then_some(spine_feedback_enabled);
                 let response = ThreadResumeResponse {
                     thread,
                     model: session_configured.model,
                     model_provider: session_configured.model_provider_id,
                     service_tier: session_configured.service_tier,
+                    spine_feedback_enabled,
                     cwd: session_configured.cwd,
                     runtime_workspace_roots: config_snapshot.workspace_roots,
                     instruction_sources,
@@ -4406,17 +4421,17 @@ impl ThreadRequestProcessor {
         stored_thread: StoredThread,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
         if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
-            let model_context = self
+            let complete_history = self
                 .thread_store
-                .load_latest_model_context(StoreLoadThreadHistoryParams {
+                .load_complete_history(StoreLoadThreadHistoryParams {
                     thread_id: stored_thread.thread_id,
                     include_archived: true,
                 })
                 .await
                 .map_err(thread_store_resume_read_error)?;
             let history = InitialHistory::Resumed(ResumedHistory {
-                conversation_id: model_context.thread_id,
-                history: Arc::new(model_context.items),
+                conversation_id: complete_history.thread_id,
+                history: Arc::new(complete_history.items),
                 rollout_path: stored_thread.rollout_path.clone(),
             });
             return Ok((history, stored_thread));
@@ -4496,7 +4511,7 @@ impl ThreadRequestProcessor {
         if stored_thread.archived_at.is_some() {
             let thread_id = stored_thread.thread_id;
             return Err(invalid_request(format!(
-                "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
+                "session {thread_id} is archived. Run `{CLI_COMMAND} unarchive {thread_id}` to unarchive it first."
             )));
         }
 
@@ -4788,7 +4803,12 @@ impl ThreadRequestProcessor {
             None
         };
         let source_history_items = if let Some(prepared_fork) = prepared_fork.as_ref() {
-            Arc::clone(&prepared_fork.model_context)
+            Arc::clone(
+                prepared_fork
+                    .complete_history
+                    .as_ref()
+                    .unwrap_or(&prepared_fork.model_context),
+            )
         } else {
             let mut source_thread = self
                 .read_stored_thread_for_resume(
@@ -5084,6 +5104,8 @@ impl ThreadRequestProcessor {
         );
 
         let config_snapshot = forked_thread.config_snapshot().await;
+        let spine_feedback_enabled =
+            super::spine_feedback_processor::spine_feedback_enabled(forked_thread.as_ref());
 
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so their visible history is projected before the source history is consumed.
@@ -5164,11 +5186,18 @@ impl ThreadRequestProcessor {
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
         let thread_originator = config_snapshot.originator.clone();
+
+        let spine_feedback_enabled = self
+            .thread_state_manager
+            .connection_experimental_api_enabled(request_id.connection_id)
+            .await
+            .then_some(spine_feedback_enabled);
         let response = ThreadForkResponse {
             thread: thread.clone(),
             model: session_configured.model,
             model_provider: session_configured.model_provider_id,
             service_tier: session_configured.service_tier,
+            spine_feedback_enabled,
             cwd: session_configured.cwd,
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,

@@ -652,6 +652,7 @@ async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
     });
@@ -1066,6 +1067,7 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
     });
@@ -1115,6 +1117,7 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
         collaboration_mode: None,
         personality: None,
         message_history: None,
+        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
     });

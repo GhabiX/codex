@@ -1,6 +1,6 @@
 # codex-app-server
 
-`codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
+`spine-codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
 
 ## Table of Contents
 
@@ -11,6 +11,7 @@
 - [Initialization](#initialization)
 - [API Overview](#api-overview)
 - [Events](#events)
+- [Spine feedback and tree events](#spine-feedback-and-tree-events)
 - [Approvals](#approvals)
 - [Skills](#skills)
 - [Apps](#apps)
@@ -19,13 +20,13 @@
 
 ## Protocol
 
-Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports bidirectional communication using JSON-RPC 2.0 messages (with the `"jsonrpc":"2.0"` header omitted on the wire).
+Similar to [MCP](https://modelcontextprotocol.io/), `spine-codex app-server` supports bidirectional communication using JSON-RPC 2.0 messages (with the `"jsonrpc":"2.0"` header omitted on the wire).
 
 Supported transports:
 
 - stdio (`--stdio` or `--listen stdio://`, default): newline-delimited JSON (JSONL)
 - websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
-- unix socket (`--listen unix://` or `--listen unix://PATH`): websocket connections over `$CODEX_HOME/app-server-control/app-server-control.sock` or a custom socket path, using the standard HTTP Upgrade handshake
+- unix socket (`--listen unix://` or `--listen unix://PATH`): websocket connections over `$CODEX_HOME/spine-app-server-control/app-server-control.sock` or a custom socket path, using the standard HTTP Upgrade handshake
 - off (`--listen off`): do not expose a local transport
 
 When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
@@ -38,8 +39,8 @@ Websocket transport is currently experimental and unsupported. Do not rely on it
 
 Pass `--code-mode-host URL` to connect this app-server process to a remote code-mode host instead of starting a local host. Use a root `http://` or `https://` URL without a path or query for gRPC. Remote hosts require the `code_mode_host` feature. This outbound connection is independent of `--listen` and is shared by the process's threads.
 
-The unix socket transport is intended for local app-server control-plane clients. `codex app-server proxy`
-opens exactly one raw stream connection to `$CODEX_HOME/app-server-control/app-server-control.sock`
+The unix socket transport is intended for local app-server control-plane clients. `spine-codex app-server proxy`
+opens exactly one raw stream connection to `$CODEX_HOME/spine-app-server-control/app-server-control.sock`
 by default, or to `--sock PATH` when provided, and proxies bytes between that socket and stdin/stdout.
 The proxied stream carries the websocket HTTP Upgrade handshake followed by websocket frames.
 
@@ -56,11 +57,11 @@ Backpressure behavior:
 
 ## Message Schema
 
-Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
+Currently, you can dump a TypeScript version of the schema using `spine-codex app-server generate-ts`, or a JSON Schema bundle via `spine-codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
 
 ```
-codex app-server generate-ts --out DIR
-codex app-server generate-json-schema --out DIR
+spine-codex app-server generate-ts --out DIR
+spine-codex app-server generate-json-schema --out DIR
 ```
 
 ## Core Primitives
@@ -126,7 +127,7 @@ Every turn and direct MCP tool call in that loaded session therefore uses the
 same initialized profile. A different app-server connection cannot change it
 by starting a later turn. Subagent sessions inherit the same extension profile.
 
-Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
+Applications building on top of `spine-codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
 you are developing a new Codex integration that is intended for enterprise use, please contact us to get it
@@ -298,6 +299,7 @@ Example with notification opt-out:
 - `mcpServer/tool/call` — call a tool on a thread's configured MCP server by `threadId`, `server`, `tool`, optional `arguments`, and optional `_meta`, returning the MCP tool result. Parent-owned Multi-Agent V2 subagents reject direct tool calls.
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional absolute `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id. With logs enabled, includes bounded recent failed Guardian review actions, decisions, and reviewer history from the reported thread and its descendants, linked to the reviewed turn and target item where available. Rollout selection preserves the reported thread and prioritizes children with retained failed reviews before newer children, including each selected thread's available Guardian trunk rollout. `feedback-thread-index.json` lists selected filenames and bounded omission details; it describes selection, not successful delivery. Failed-review captures are process-local, so missing evidence does not establish that no denial occurred.
+- `feedback/spineUpload` — submit a user-consented Spine rollout-debug report for any active Spine-enabled thread. The request is stable and accepts `{ threadId, note?, screenshots? }`, where `screenshots` may be omitted, `null`, or an array; it returns `{ reportId }` on a successful upload. The experimental `spineFeedbackEnabled` field on `thread/start`, `thread/resume`, and `thread/fork` responses tells opted-in clients whether the thread is eligible. Calls for a non-Spine thread fail with an invalid-request error. The supplied thread is the root of the selected report subtree: the server redacts its rollout bundle and includes that thread plus its agent descendants. It accepts a note up to 8 KiB and at most three PNG screenshots (5 MiB each, 10 MiB total, 8,192 pixels per side, and 16 million decoded pixels). The rollout bundle and screenshots together are limited to 20 MiB. This is separate from `feedback/upload`; it never emits a raw Responses item.
 - `config/read` — fetch the runtime-effective config after resolving config layering and managed requirements, including opaque `desktop` values stored in `config.toml`. When configured, the `packagedDefaults` layer has the lowest precedence.
 - `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome`, optional `cwds`, and an optional `migrationSource` selector. Omitted, `null`, or unrecognized migration-source values retain the default behavior. The deprecated optional `source` field remains accepted for compatibility but does not select the migration source. Each detected item includes `cwd` (`null` for home), and multi-item migrations may additionally include structured `details` with plugin ids, skill names, memory, session metadata, or other artifact names. The response also includes connector candidates inferred from detected source sessions, with a normalized display `name`, the number of detected sessions that used the connector, and the source metadata field used for detection.
 - `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home) and any `details` returned by detect. Pass the same optional `migrationSource` used for detection so the server reads from the matching source; omitted, `null`, or unrecognized values retain the default behavior. The optional `source` identifies the product that initiated the import, while the optional opaque `providerId` attributes analytics to the provider selected by that product without affecting migration-source selection. The response acknowledges the synchronous import phase with an `importId`. Expected migration failures are reported as per-item failures rather than JSON-RPC errors, so the server still returns that `importId` and emits `externalAgentConfig/import/completed` with the same ID once all synchronous and background work finishes. The completion notification contains type-level `itemTypeResults` with successes and failures, including raw failure messages for the client to report separately.
@@ -1768,6 +1770,37 @@ Examples:
 - Opt out of thread lifecycle notifications: `thread/started`
 - Opt out of streamed agent text deltas: `item/agentMessage/delta`
 
+### Spine feedback and tree events
+
+Spine is optional. Clients that opt into `capabilities.experimentalApi` receive
+the experimental boolean `spineFeedbackEnabled` in `thread/start`,
+`thread/resume`, and `thread/fork` responses. A value of `true` authorizes the
+stable `feedback/spineUpload` request for that active thread; `false` or
+an omitted field must be treated as unavailable. The selected active thread
+becomes the root of the reported subtree. The request never uploads
+without an explicit client call, and the user should be shown the note,
+screenshot, and redacted-bundle consent described in the API overview before it
+is sent.
+
+Spine state is delivered through typed notifications, never through
+`rawResponseItem/*` or `rawResponse/completed`:
+
+- `thread/rolledBack` — stable `{ threadId }` after a successful
+  `thread/rollback` has been persisted.
+- `turn/spineTree/updated` — stable `{ threadId, turnId, snapshotSeq,
+  activeNodeId, nodes, settledSpawnCallIds }` whenever a live Spine tree
+  snapshot changes. `nodes` is the bounded presentation projection and
+  `settledSpawnCallIds` identifies Spawn calls whose terminal state has already
+  been folded into that snapshot; neither replaces canonical thread history.
+- `turn/spineSpawnProgress/updated` — experimental, live-only
+  `{ threadId, turnId, callId, tasks }` progress for an active `spine.spawn`.
+  It requires `capabilities.experimentalApi`, is not persisted or replayed, and
+  clients must tolerate its absence.
+
+All three notification methods can be suppressed with their exact method name
+in `capabilities.optOutNotificationMethods`. Opting out affects only delivery
+to that connection; it does not disable rollback, tree tracking, or Spawn.
+
 ### Fuzzy file search events (experimental)
 
 The fuzzy file search session API emits per-query notifications:
@@ -2514,7 +2547,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
 - **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"` for the browser flow or `type: "chatgptDeviceCode"` for device code; Codex persists tokens to disk and refreshes them automatically.
 - **Codex managed Amazon Bedrock auth (experimental)**: Caller supplies an Amazon Bedrock API key using `type: "amazonBedrock"` or AWS access keys using `type: "amazonBedrockAccessKeys"` via `account/login/start`. The client must enable the `experimentalApi` initialization capability. Codex replaces the current primary auth with the Bedrock credential and writes `model_provider = "amazon-bedrock"` to the user config.
-- **Personal access token (`personalAccessToken`)**: Codex uses a ChatGPT-backed personal access token loaded outside the app-server login RPCs, such as with `codex login --with-access-token` or `CODEX_ACCESS_TOKEN`.
+- **Personal access token (`personalAccessToken`)**: Codex uses a ChatGPT-backed personal access token loaded outside the app-server login RPCs, such as with `spine-codex login --with-access-token` or `CODEX_ACCESS_TOKEN`.
 
 ### API Overview
 
@@ -2821,16 +2854,16 @@ Some app-server methods and fields are intentionally gated behind an experimenta
 
 ### Generating stable vs experimental client schemas
 
-`codex app-server` schema generation defaults to the stable API surface (experimental fields and methods filtered out). Pass `--experimental` to include experimental methods/fields in generated TypeScript or JSON schema:
+`spine-codex app-server` schema generation defaults to the stable API surface (experimental fields and methods filtered out). Pass `--experimental` to include experimental methods/fields in generated TypeScript or JSON schema:
 
 ```bash
 # Stable-only output (default)
-codex app-server generate-ts --out DIR
-codex app-server generate-json-schema --out DIR
+spine-codex app-server generate-ts --out DIR
+spine-codex app-server generate-json-schema --out DIR
 
 # Include experimental API surface
-codex app-server generate-ts --out DIR --experimental
-codex app-server generate-json-schema --out DIR --experimental
+spine-codex app-server generate-ts --out DIR --experimental
+spine-codex app-server generate-json-schema --out DIR --experimental
 ```
 
 ### How clients opt in at runtime

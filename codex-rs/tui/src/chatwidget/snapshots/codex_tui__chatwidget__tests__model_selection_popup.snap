@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
   Select Model and Effort
-  Access legacy models by running codex -m <model_name> or in your config.toml
+  Legacy models: spine-codex -m <model_name> or config.toml
 
   1. gpt-6-astra (default)  Our most capable model for complex, demanding
                             work.

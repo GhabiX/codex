@@ -17,6 +17,7 @@ anyhow = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-transport = { workspace = true }
 codex-http-client = { workspace = true }
+codex-install-context = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-uds = { workspace = true }
 futures = { workspace = true }

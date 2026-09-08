@@ -48,6 +48,7 @@ use crate::onboarding::keys;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
+use crate::product_brand::ProductBrand;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
@@ -128,11 +129,14 @@ impl OnboardingScreen {
             .map(|project| project.trust_target.to_string_lossy().into_owned());
         let auth_config = config.auth_config();
         let mut steps: Vec<Step> = Vec::new();
-        steps.push(Step::Welcome(WelcomeWidget::new(
-            !matches!(login_status, LoginStatus::NotAuthenticated),
-            tui.frame_requester(),
-            config.animations,
-        )));
+        steps.push(Step::Welcome(
+            WelcomeWidget::new(
+                !matches!(login_status, LoginStatus::NotAuthenticated),
+                tui.frame_requester(),
+                config.animations,
+            )
+            .with_brand(ProductBrand::from_config(&config)),
+        ));
         if show_login_screen {
             let highlighted_mode =
                 if auth_config.is_login_method_allowed(ForcedLoginMethod::Chatgpt) {

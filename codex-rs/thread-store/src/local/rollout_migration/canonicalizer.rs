@@ -295,7 +295,9 @@ impl LegacyRolloutCanonicalizer {
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::RealtimeItem(_)
             | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::WorldState(_)) => {
+            | RolloutItem::WorldState(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_)) => {
                 self.write_item(writer, &timestamp, item).await?;
             }
         }

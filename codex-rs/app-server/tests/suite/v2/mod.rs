@@ -94,6 +94,8 @@ mod server_diagnostics;
 mod session_end;
 mod skills_list;
 mod sleep;
+mod spine_compact_replay;
+mod spine_feedback;
 mod thread_archive;
 mod thread_delete;
 mod thread_fork;

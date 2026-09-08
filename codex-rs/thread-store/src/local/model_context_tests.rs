@@ -14,8 +14,13 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -80,6 +85,64 @@ async fn loads_latest_checkpoint_with_required_turn_metadata() {
     assert!(context.items.iter().any(|item| {
         matches!(item, RolloutItem::TurnContext(context) if context.turn_id.as_deref() == Some("turn-2"))
     }));
+
+    let complete = store
+        .load_complete_history(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete history");
+    assert!(complete.items.iter().any(|item| {
+        matches!(item, RolloutItem::Compacted(compacted) if compacted.message == "older checkpoint")
+    }));
+    assert!(complete.items.iter().any(|item| {
+        matches!(item, RolloutItem::Compacted(compacted) if compacted.message == "latest checkpoint")
+    }));
+}
+
+#[tokio::test]
+async fn complete_history_skips_rejected_rollout_records() {
+    let home = TempDir::new().expect("temp dir");
+    let uuid = Uuid::from_u128(/*v*/ 1008);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
+    let path = write_paginated_rollout(
+        home.path(),
+        "2025-01-03T13-00-07",
+        uuid,
+        [turn_started("before-rejected-record")],
+    );
+    append_rejected_token_count(path.as_path());
+    append_items(path.as_path(), [turn_complete("after-rejected-record")]);
+
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let history = store
+        .load_complete_history(LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete history");
+
+    let event_items = history
+        .items
+        .into_iter()
+        .filter(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnStarted(_))
+                    | RolloutItem::EventMsg(EventMsg::TurnComplete(_))
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        serde_json::to_value(event_items).expect("serialize loaded event items"),
+        serde_json::to_value(vec![
+            turn_started("before-rejected-record"),
+            turn_complete("after-rejected-record")
+        ])
+        .expect("serialize expected event items")
+    );
 }
 
 #[tokio::test]
@@ -213,7 +276,7 @@ async fn fork_context_excludes_items_after_frozen_cutoff() {
         .await
         .expect("read source metadata");
 
-    let context = load_for_fork(lineage, Some(history_base))
+    let startup = load_for_fork(lineage, Some(history_base))
         .await
         .expect("load frozen fork context");
 
@@ -223,7 +286,11 @@ async fn fork_context_excludes_items_after_frozen_cutoff() {
         user_message("frozen message"),
     ];
     assert_eq!(
-        serde_json::to_value(context).expect("serialize fork context"),
+        serde_json::to_value(startup.model_context).expect("serialize fork context"),
+        serde_json::to_value(&expected).expect("serialize expected fork context")
+    );
+    assert_eq!(
+        serde_json::to_value(startup.complete_history).expect("serialize complete fork history"),
         serde_json::to_value(expected).expect("serialize expected fork context")
     );
 }
@@ -650,6 +717,38 @@ fn append_items(path: &Path, items: impl IntoIterator<Item = RolloutItem>) {
         )
         .expect("append rollout line");
     }
+}
+
+fn append_rejected_token_count(path: &Path) {
+    let line = RolloutLine {
+        timestamp: "2025-01-03T13:00:01Z".to_string(),
+        ordinal: None,
+        item: RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+            info: None,
+            rate_limits: Some(RateLimitSnapshot {
+                limit_id: None,
+                limit_name: None,
+                primary: Some(RateLimitWindow {
+                    used_percent: 42.0,
+                    window_minutes: Some(60),
+                    resets_at: Some(1_735_918_801),
+                }),
+                secondary: None,
+                credits: None,
+                individual_limit: None,
+                spend_control_reached: None,
+                plan_type: None,
+                rate_limit_reached_type: None,
+            }),
+        })),
+    };
+    let mut value = serde_json::to_value(line).expect("serialize rejected rollout line");
+    value["payload"]["rate_limits"]["primary"]["used_percent"] = serde_json::json!({"value": 42.0});
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("open session file");
+    writeln!(file, "{value}").expect("append rejected rollout line");
 }
 
 fn turn_started(turn_id: &str) -> RolloutItem {

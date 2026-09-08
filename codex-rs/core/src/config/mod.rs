@@ -135,6 +135,8 @@ use rmcp::model::FormElicitationCapability;
 use rmcp::model::UrlElicitationCapability;
 use serde::Deserialize;
 use serde::Serialize;
+use spine_core::host::SpineConfig;
+use spine_core::host::ToolCatalog;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -1044,6 +1046,9 @@ pub struct Config {
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
+    /// Session-scoped capacity for children created through `spine.spawn`.
+    pub spine_spawn: SpineSpawnConfig,
+
     /// Context-window token budget configuration, when enabled.
     pub token_budget: Option<TokenBudgetConfig>,
     /// Shared token budget for the root thread and its sub-agents.
@@ -1055,6 +1060,12 @@ pub struct Config {
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
+
+    /// Validated host-neutral Spine SDK configuration.
+    pub spine_config: SpineConfig,
+
+    /// Model-visible Spine tools derived from the SDK configuration.
+    pub spine_tools: ToolCatalog,
 
     /// When `true`, suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: bool,
@@ -1306,6 +1317,20 @@ impl Default for MultiAgentV2Config {
         Self::defaults_for_max_concurrency(
             DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
         )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SpineSpawnConfig {
+    pub max_concurrent_threads_per_session: usize,
+}
+
+impl Default for SpineSpawnConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_threads_per_session:
+                DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
+        }
     }
 }
 
@@ -2763,6 +2788,16 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
     }
 }
 
+fn resolve_spine_spawn_config(config_toml: &ConfigToml) -> SpineSpawnConfig {
+    SpineSpawnConfig {
+        max_concurrent_threads_per_session: config_toml
+            .spine_spawn
+            .as_ref()
+            .and_then(|config| config.max_concurrent_threads_per_session)
+            .unwrap_or(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION),
+    }
+}
+
 pub(crate) fn resolve_token_budget_config(
     config_toml: &ConfigToml,
     features: &ManagedFeatures,
@@ -3371,6 +3406,14 @@ impl Config {
                 repo_root.as_ref().map(AbsolutePathBuf::as_path),
             )
             .unwrap_or(ProjectConfig { trust_level: None });
+        let home_directory = dirs::home_dir();
+        let (spine_config, spine_tools) = crate::spine::config::load(
+            cfg.spine_config_file.as_ref(),
+            resolved_cwd.as_path(),
+            home_directory.as_deref(),
+            &features,
+            active_project.is_trusted(),
+        )?;
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
             &cfg,
@@ -3693,6 +3736,7 @@ impl Config {
         };
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
+        let spine_spawn = resolve_spine_spawn_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
@@ -3743,6 +3787,12 @@ impl Config {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "features.multi_agent_v2.max_concurrent_threads_per_session must be at least 1",
+            ));
+        }
+        if spine_spawn.max_concurrent_threads_per_session == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "spine_spawn.max_concurrent_threads_per_session must be at least 1",
             ));
         }
         validate_multi_agent_v2_wait_timeout(
@@ -4300,11 +4350,14 @@ impl Config {
             background_terminal_max_timeout,
             ghost_snapshot,
             multi_agent_v2,
+            spine_spawn,
             token_budget,
             rollout_budget,
             current_time_reminder,
             sleep_tool_mode,
             features,
+            spine_config,
+            spine_tools,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
                 .unwrap_or(false),

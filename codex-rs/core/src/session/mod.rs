@@ -251,6 +251,7 @@ use self::code_mode_warning::unsupported_code_mode_warning;
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
 pub(crate) use self::input_queue::InputQueueActivity;
+pub(crate) use self::input_queue::MailboxSubmissionCancellation;
 pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
 use self::review::spawn_review_thread;
@@ -700,6 +701,7 @@ impl Session {
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+        let base_instructions = config.spine_config.extend_system_prompt(&base_instructions);
 
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
         let dynamic_tools = if dynamic_tools.is_empty() {
@@ -1323,7 +1325,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Option<i64> {
-        let history = self.clone_history().await;
+        let history = self.clone_model_context().await;
         history.estimate_token_count(turn_context)
     }
 
@@ -1580,11 +1582,7 @@ impl Session {
             .collect();
         {
             let mut state = self.state.lock().await;
-            state.replace_annotated_history(
-                history,
-                reference_context_item,
-                HistoryReplacement::Reset,
-            );
+            state.replace_history_from_rollout(history, reference_context_item, rollout_items);
             state
                 .history
                 .restore_guardian_history(guardian_history.as_ref());
@@ -1607,7 +1605,7 @@ impl Session {
             turn_context.config.model_auto_compact_token_limit_scope,
             AutoCompactTokenLimitScope::BodyAfterPrefix
         ) {
-            let history = self.clone_history().await;
+            let history = self.clone_model_context().await;
             let base_instructions = self.get_base_instructions().await;
             history.estimate_token_count_with_base_instructions(&base_instructions)
         } else {
@@ -2137,11 +2135,23 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if turn_context.multi_agent_version != MultiAgentVersion::V2 {
+        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
             return;
         }
 
-        if !matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
+        if self
+            .services
+            .agent_control
+            .suppresses_parent_completion_notification(self.thread_id)
+        {
+            if let Some(error) = turn_context.terminal_error.lock().await.take() {
+                self.agent_status
+                    .send_replace(AgentStatus::Errored(error.message));
+            }
+            return;
+        }
+
+        if turn_context.multi_agent_version != MultiAgentVersion::V2 {
             return;
         }
 
@@ -2351,6 +2361,20 @@ impl Session {
     pub(crate) async fn send_event_raw(&self, event: Event) {
         self.send_event_raw_with_persistence(event, /*persist*/ true)
             .await;
+    }
+
+    /// Delivers experimental Spawn progress to live clients only. The completed
+    /// typed receipt remains the sole durable parent input.
+    pub(crate) async fn emit_spine_spawn_progress(
+        &self,
+        turn_context: &TurnContext,
+        progress: codex_protocol::protocol::SpineSpawnProgressEvent,
+    ) {
+        self.deliver_event_raw(Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::SpineSpawnProgress(progress),
+        })
+        .await;
     }
 
     /// Delivers an event without creating a local rollout for a thread that has not materialized.
@@ -3746,7 +3770,7 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
     ) {
         let mut state = self.state.lock().await;
-        state.replace_history(items, reference_context_item);
+        state.replace_history_from_rollout(items, reference_context_item, &[]);
     }
 
     pub(crate) async fn replace_compacted_history(
@@ -3755,7 +3779,7 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
         world_state_baseline: Option<Arc<WorldState>>,
         metadata: CompactedHistoryMetadata,
-    ) {
+    ) -> anyhow::Result<()> {
         for envelope in &mut items {
             Self::assign_missing_response_item_id(&mut envelope.item);
         }
@@ -3781,12 +3805,16 @@ impl Session {
         let mut world_state_item = None;
         {
             let mut state = self.state.lock().await;
+            state
+                .prepare_spine_compact(&items)
+                .map_err(anyhow::Error::msg)?;
             state.replace_annotated_history(
                 items,
                 reference_context_item.clone(),
                 HistoryReplacement::Compaction,
             );
             compacted_item.guardian_history = state.history.guardian_history_checkpoint();
+            state.install_auto_compact_window(metadata.window_number, metadata.window_ids);
             if let Some(world_state) = world_state_baseline {
                 let snapshot = world_state.snapshot();
                 world_state_item = Some(WorldStateItem::full(snapshot.clone().into_object()));
@@ -3809,8 +3837,10 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
         {
             let mut state = self.state.lock().await;
+            state.publish_spine_compact();
             state.queue_pending_session_start_source(codex_hooks::SessionStartSource::Compact);
         }
+        Ok(())
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {
@@ -4149,6 +4179,16 @@ impl Session {
         state.history.conversation_history_snapshot()
     }
 
+    pub(crate) async fn clone_model_context(&self) -> ContextManager {
+        let state = self.state.lock().await;
+        state.clone_model_context()
+    }
+
+    pub(crate) async fn install_spine_model_context(&self, items: Vec<ResponseItem>) {
+        let mut state = self.state.lock().await;
+        state.install_spine_model_context(items);
+    }
+
     pub(crate) async fn current_window_id(&self) -> String {
         self.current_window().await.0
     }
@@ -4165,9 +4205,9 @@ impl Session {
         )
     }
 
-    pub(crate) async fn advance_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
-        let mut state = self.state.lock().await;
-        state.advance_auto_compact_window()
+    pub(crate) async fn next_auto_compact_window(&self) -> (u64, AutoCompactWindowIds) {
+        let state = self.state.lock().await;
+        state.next_auto_compact_window()
     }
 
     pub(crate) async fn request_new_context_window(&self) {
@@ -4184,7 +4224,7 @@ impl Session {
         &self,
         step_context: &StepContext,
         world_state: Arc<WorldState>,
-    ) -> u64 {
+    ) -> CodexResult<u64> {
         let turn_context = step_context.turn.as_ref();
         let retained_client_developer_messages =
             if self.enabled(Feature::RetainClientDeveloperMessages) {
@@ -4204,8 +4244,8 @@ impl Session {
                 Vec::new()
             };
         let window = {
-            let mut state = self.state.lock().await;
-            state.start_new_context_window()
+            let state = self.state.lock().await;
+            state.next_auto_compact_window()
         };
         let (window_number, window_ids) = window;
         let context_items = self
@@ -4227,9 +4267,10 @@ impl Session {
                 compaction_response_id: None,
             },
         )
-        .await;
+        .await
+        .map_err(|error| CodexErr::Fatal(error.to_string()))?;
         self.recompute_token_usage(turn_context).await;
-        window_number
+        Ok(window_number)
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
@@ -4410,7 +4451,7 @@ impl Session {
     }
 
     pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
-        let history = self.clone_history().await;
+        let history = self.clone_model_context().await;
         let base_instructions = self.get_base_instructions().await;
         let Some(estimated_total_tokens) =
             history.estimate_token_count_with_base_instructions(&base_instructions)
@@ -4488,8 +4529,11 @@ impl Session {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
-        let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
+        let token_count = TokenCountEvent { info, rate_limits };
+        let event = EventMsg::TokenCount(token_count.clone());
         self.send_event(turn_context, event).await;
+        let mut state = self.state.lock().await;
+        state.observe_spine_token_count(token_count);
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {

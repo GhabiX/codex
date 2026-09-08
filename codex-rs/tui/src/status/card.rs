@@ -5,6 +5,7 @@ use crate::history_cell::plain_lines;
 use crate::history_cell::with_border_with_inner_width;
 use crate::legacy_core::config::Config;
 use crate::line_truncation::line_width;
+use crate::product_brand::ProductBrand;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use crate::version::CODEX_CLI_VERSION;
@@ -23,6 +24,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_cli::CLI_COMMAND;
 use codex_utils_sandbox_summary::summarize_permission_profile;
 use ratatui::prelude::*;
 use ratatui::style::Stylize;
@@ -117,6 +119,7 @@ impl StatusHistoryHandle {
 
 #[derive(Debug)]
 struct StatusHistoryCell {
+    brand: ProductBrand,
     model_name: String,
     model_details: Vec<String>,
     directory: PathBuf,
@@ -368,6 +371,7 @@ impl StatusHistoryCell {
 
         (
             Self {
+                brand: ProductBrand::from_config(config),
                 model_name,
                 model_details,
                 directory: config.cwd.to_path_buf(),
@@ -725,12 +729,13 @@ fn status_approval_label(
 impl HistoryCell for StatusHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(vec![
-            Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
-            Span::from("OpenAI Codex").bold(),
+        let mut title_spans = vec![Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim()];
+        title_spans.extend(self.brand.title_spans());
+        title_spans.extend([
             Span::from(" ").dim(),
             Span::from(format!("(v{CODEX_CLI_VERSION})")).dim(),
-        ]));
+        ]);
+        lines.push(Line::from(title_spans));
 
         let available_inner_width = usize::from(width.saturating_sub(4));
         if available_inner_width == 0 {
@@ -745,7 +750,7 @@ impl HistoryCell for StatusHistoryCell {
                 (None, None) => "ChatGPT".to_string(),
             },
             StatusAccountDisplay::ApiKey => {
-                "API key configured (run codex login to use ChatGPT)".to_string()
+                format!("API key configured (run {CLI_COMMAND} login to use ChatGPT)")
             }
         });
 

@@ -29,7 +29,7 @@ pub(super) async fn run_remote_compact_attempt(
     analytics_details: &mut CompactionAnalyticsDetails,
 ) -> CodexResult<RemoteCompactAttempt> {
     let turn_context = &step_context.turn;
-    let mut history = sess.clone_history().await;
+    let mut history = sess.clone_model_context().await;
     let base_instructions = sess.get_prompt_base_instructions().await;
     let (rewritten_outputs, estimated_deleted_tokens) =
         trim_function_call_history_to_fit_context_window(
@@ -62,7 +62,8 @@ pub(super) async fn run_remote_compact_attempt(
     let tool_router = &step_context.tool_router;
     let prompt = Prompt {
         input: prompt_input,
-        tools: tool_router.model_visible_specs(),
+        tools: tool_router.base_model_visible_specs(),
+        spine_tool: tool_router.spine_model_visible_spec(),
         parallel_tool_calls: true,
         base_instructions,
         output_schema: None,

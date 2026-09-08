@@ -113,7 +113,7 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
   name is already taken and you need to seed a different new marketplace file.
 - Do not use `--marketplace-name` to rename an existing marketplace file in place. If the file
   already exists, its top-level `name` must already match.
-- If the user specifies a different marketplace path, treat that marketplace as needing explicit installation via `codex plugin marketplace add`.
+- If the user specifies a different marketplace path, treat that marketplace as needing explicit installation via `spine-codex plugin marketplace add`.
 - Plugin names must match `[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*`.
 - Marketplace names must match `[A-Za-z0-9_-]+`.
 - For existing marketplaces, always validate names with `scripts/read_marketplace_name.py`; stop if
@@ -207,11 +207,11 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
 - For updates to an existing local plugin during development, do not hand-edit marketplace config
   or `marketplace.json`. Use the update flow documented in
   `references/installing-and-updating.md` and `scripts/update_plugin_cachebuster.py`.
-- Do not tell the user to run `codex plugin marketplace add` for the default personal-marketplace
+- Do not tell the user to run `spine-codex plugin marketplace add` for the default personal-marketplace
   flow. That command is for explicit non-default marketplace configuration, not for the standard
   `~/.agents/plugins/marketplace.json` path.
 - If the user provided a non-default `--marketplace-path`, make sure that marketplace is installed
-  before giving reinstall instructions. Use `codex plugin marketplace add <path-to-marketplace-root>`
+  before giving reinstall instructions. Use `spine-codex plugin marketplace add <path-to-marketplace-root>`
   when that explicit marketplace has not been configured yet.
 - When the workflow created or updated a marketplace-backed plugin, end the final user-facing
   response with a short Codex app handoff. Say `To view this in the Codex app:` and write

@@ -78,6 +78,8 @@ pub struct ToolRouter {
     code_mode_tool_names: BTreeMap<String, ToolName>,
     tool_namespaces_info: Option<TurnToolNamespacesInfo>,
     can_manage_children: bool,
+    base_model_visible_specs: Vec<ToolSpec>,
+    spine_model_visible_spec: Option<ToolSpec>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,7 +123,9 @@ impl ToolRouter {
     ) -> Self {
         let mut router = Self {
             registry,
-            model_visible_specs: model_visible_specs.into(),
+            model_visible_specs: model_visible_specs.clone().into(),
+            base_model_visible_specs: model_visible_specs,
+            spine_model_visible_spec: None,
             tool_mode,
             code_mode_tool_names,
             tool_namespaces_info,
@@ -132,10 +136,6 @@ impl ToolRouter {
                 .iter()
                 .all(|name| router.exposes_tool(name));
         router
-    }
-
-    pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
-        Arc::clone(&self.model_visible_specs)
     }
 
     pub(crate) fn tool_mode(&self) -> ToolMode {
@@ -206,6 +206,33 @@ impl ToolRouter {
                     && (tool.runtime.immutable_spec().is_some()
                         || tool.runtime.search_info().is_some())
             })
+    }
+
+    pub(crate) fn from_parts_with_spine(
+        registry: ToolRegistry,
+        base_model_visible_specs: Vec<ToolSpec>,
+        spine_model_visible_spec: Option<ToolSpec>,
+    ) -> Self {
+        Self {
+            registry,
+            base_model_visible_specs,
+            spine_model_visible_spec,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
+        let mut specs = self.base_model_visible_specs.clone();
+        specs.extend(self.spine_model_visible_spec.clone());
+        specs
+    }
+
+    pub(crate) fn base_model_visible_specs(&self) -> Vec<ToolSpec> {
+        self.base_model_visible_specs.clone()
+    }
+
+    pub(crate) fn spine_model_visible_spec(&self) -> Option<ToolSpec> {
+        self.spine_model_visible_spec.clone()
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {

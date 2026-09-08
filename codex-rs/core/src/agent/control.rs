@@ -17,6 +17,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
 use crate::session::multi_agents::ResolvedMultiAgentV2UsageHints;
+use crate::session::new_submission_id;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
@@ -76,10 +77,12 @@ mod residency;
 mod service_tier;
 mod spawn;
 mod user_authorization;
+mod spine;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpawnAgentForkMode {
     FullHistory,
+    FullHistoryAtSamplingStart,
     LastNTurns(usize),
 }
 
@@ -93,6 +96,27 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) multi_agent_v2_usage_hints: Option<ResolvedMultiAgentV2UsageHints>,
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
+}
+
+pub(crate) struct SpawnAgentBatchRequest {
+    pub(crate) session_source: SessionSource,
+    pub(crate) options: SpawnAgentOptions,
+    pub(crate) suppress_parent_completion_notification: bool,
+}
+
+impl SpawnAgentBatchRequest {
+    pub(crate) fn new(session_source: SessionSource, options: SpawnAgentOptions) -> Self {
+        Self {
+            session_source,
+            options,
+            suppress_parent_completion_notification: false,
+        }
+    }
+
+    pub(crate) fn suppress_parent_completion_notification(mut self) -> Self {
+        self.suppress_parent_completion_notification = true;
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -127,6 +151,7 @@ pub(crate) struct AgentControl {
     state: Arc<AgentRegistry>,
     v2_residency: Arc<V2Residency>,
     agent_execution_limiter: Arc<AgentExecutionLimiter>,
+    spine_spawn_limiter: Arc<AgentExecutionLimiter>,
     /// Session-scoped state shared by the root thread and every cloned sub-agent control handle.
     rollout_budget: Arc<RolloutBudget>,
     /// The user-selected root routing tier, shared by the entire agent tree.
@@ -322,13 +347,20 @@ impl AgentControl {
         } else {
             (None, None)
         };
+        let target = state.get_thread(agent_id).await?;
+        let submission_id = new_submission_id();
+        let submission = target
+            .session
+            .input_queue
+            .register_mailbox_submission(submission_id.clone(), communication.author.clone());
         let result = self
             .handle_thread_request_result(
                 agent_id,
                 state,
                 state
-                    .send_op(
+                    .send_op_with_id(
                         agent_id,
+                        submission_id,
                         Op::InterAgentCommunication {
                             communication,
                             start_options,
@@ -339,6 +371,9 @@ impl AgentControl {
                     .await,
             )
             .await;
+        if result.is_ok() {
+            submission.accepted();
+        }
         if let (Some(communication), Ok(communication_id)) =
             (communication_for_log, result.as_ref())
         {
@@ -411,6 +446,16 @@ impl AgentControl {
 
     pub(crate) fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
         self.state.agent_metadata_for_thread(agent_id)
+    }
+
+    pub(crate) fn agent_id_for_path(&self, agent_path: &AgentPath) -> Option<ThreadId> {
+        self.state.agent_id_for_path(agent_path)
+    }
+
+    pub(crate) fn suppresses_parent_completion_notification(&self, agent_id: ThreadId) -> bool {
+        self.state
+            .agent_metadata_for_thread(agent_id)
+            .is_some_and(|metadata| metadata.suppress_parent_completion_notification)
     }
 
     pub(crate) fn ensure_agent_known(&self, agent_id: ThreadId) -> CodexResult<AgentMetadata> {
@@ -684,6 +729,7 @@ impl AgentControl {
             agent_path,
             agent_nickname,
             agent_role,
+            suppress_parent_completion_notification: false,
         })
     }
 

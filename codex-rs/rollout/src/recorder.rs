@@ -2100,7 +2100,9 @@ async fn resume_candidate_matches_cwd(
             | RolloutItem::RealtimeItem(_)
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::EventMsg(_) => None,
+            | RolloutItem::EventMsg(_)
+            | RolloutItem::SpineSamplingStarted(_)
+            | RolloutItem::SpineTransition(_) => None,
         })
     {
         return cwd_matches(latest_turn_context_cwd.as_path(), cwd);

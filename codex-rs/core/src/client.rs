@@ -328,6 +328,21 @@ pub struct ModelClientSession {
     turn_state: Arc<OnceLock<String>>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ToolChoice {
+    Auto,
+    None,
+}
+
+impl ToolChoice {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct LastResponse {
     response_id: String,
@@ -933,6 +948,30 @@ impl ModelClient {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
+        self.build_responses_request_with_tool_choice(
+            provider,
+            prompt,
+            model_info,
+            effort,
+            summary,
+            service_tier,
+            responses_metadata,
+            ToolChoice::Auto,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_responses_request_with_tool_choice(
+        &self,
+        provider: &codex_api::Provider,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<String>,
+        responses_metadata: &CodexResponsesMetadata,
+        tool_choice: ToolChoice,
+    ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
         let is_openai = self.state.provider.info().is_openai();
         let (instructions, tools) = if model_info.use_responses_lite {
@@ -955,6 +994,19 @@ impl ModelClient {
                 role: "developer".to_string(),
                 tools,
             }];
+            if let Some(spine_tool) = &prompt.spine_tool {
+                let tools = if self.state.provider.capabilities().namespace_tools {
+                    create_tools_json_for_responses_lite(std::slice::from_ref(spine_tool))?
+                } else {
+                    create_tools_json_for_responses_api(std::slice::from_ref(spine_tool))?
+                };
+                let item = ResponseItem::AdditionalTools {
+                    id: None,
+                    role: "developer".to_string(),
+                    tools,
+                };
+                prefix.push(item);
+            }
             if !prompt.base_instructions.text.is_empty() {
                 let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
                     prompt.base_instructions.text.clone(),
@@ -968,9 +1020,10 @@ impl ModelClient {
             input.splice(0..0, prefix);
             (String::new(), None)
         } else {
+            let model_visible_specs = prompt.model_visible_specs();
             (
                 prompt.base_instructions.text.clone(),
-                Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
+                Some(create_tools_raw_json_for_responses_api(&model_visible_specs)?.into()),
             )
         };
         if !is_openai {
@@ -1016,7 +1069,7 @@ impl ModelClient {
             instructions,
             input,
             tools,
-            tool_choice: "auto".to_string(),
+            tool_choice: tool_choice.as_str().to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
             reasoning: Some(reasoning),
             store: false,
@@ -1570,6 +1623,7 @@ impl ModelClientSession {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
+        tool_choice: ToolChoice,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
         let mut auth_recovery = auth_manager
@@ -1607,13 +1661,15 @@ impl ModelClientSession {
                 )
                 .await;
 
-            let mut request = self.client.build_responses_request(
+            let mut request = self.client.build_responses_request_with_tool_choice(
+                &client_setup.api_provider,
                 prompt,
                 model_info,
                 effort.clone(),
                 summary,
                 service_tier.clone(),
                 responses_metadata,
+                tool_choice,
             )?;
             if endpoint == ResponsesEndpoint::Guardian {
                 request.service_tier = None;
@@ -1729,6 +1785,7 @@ impl ModelClientSession {
         warmup: bool,
         request_trace: Option<W3cTraceContext>,
         inference_trace: &InferenceTraceContext,
+        tool_choice: ToolChoice,
     ) -> Result<WebsocketStreamOutcome> {
         let provider = Arc::clone(&self.client.state.provider);
         let auth_manager = provider.auth_manager();
@@ -1750,13 +1807,15 @@ impl ModelClientSession {
                 client_setup.agent_identity_telemetry.clone(),
                 pending_retry,
             );
-            let mut request = self.client.build_responses_request(
+            let mut request = self.client.build_responses_request_with_tool_choice(
+                &client_setup.api_provider,
                 prompt,
                 model_info,
                 effort.clone(),
                 summary,
                 service_tier.clone(),
                 responses_metadata,
+                tool_choice,
             )?;
             if endpoint == ResponsesEndpoint::Guardian {
                 request.service_tier = None;
@@ -1982,6 +2041,7 @@ impl ModelClientSession {
                 /*warmup*/ true,
                 current_span_w3c_trace_context(),
                 &disabled_trace,
+                ToolChoice::Auto,
             )
             .await
         {
@@ -2024,6 +2084,33 @@ impl ModelClientSession {
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
+        self.stream_with_tool_choice(
+            prompt,
+            model_info,
+            session_telemetry,
+            effort,
+            summary,
+            service_tier,
+            responses_metadata,
+            inference_trace,
+            ToolChoice::Auto,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn stream_with_tool_choice(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<String>,
+        responses_metadata: &CodexResponsesMetadata,
+        inference_trace: &InferenceTraceContext,
+        tool_choice: ToolChoice,
+    ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {
@@ -2041,6 +2128,7 @@ impl ModelClientSession {
                             /*warmup*/ false,
                             request_trace,
                             inference_trace,
+                            tool_choice,
                         )
                         .await?
                     {
@@ -2060,6 +2148,7 @@ impl ModelClientSession {
                     service_tier,
                     responses_metadata,
                     inference_trace,
+                    tool_choice,
                 )
                 .await
             }

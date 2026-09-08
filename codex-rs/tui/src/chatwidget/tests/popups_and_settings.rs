@@ -3002,12 +3002,21 @@ async fn experimental_features_popup_snapshot() {
             name: "JavaScript REPL".to_string(),
             description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities.".to_string(),
             enabled: false,
+            max_concurrent_threads_per_session: None,
+        },
+        ExperimentalFeatureItem {
+            feature: Feature::SpineSpawn,
+            name: "Spine spawn".to_string(),
+            description: "Run differentiated Spine branches concurrently and join their results. Disabled by default; changes apply to new sessions.".to_string(),
+            enabled: false,
+            max_concurrent_threads_per_session: Some(5),
         },
         ExperimentalFeatureItem {
             feature: Feature::ShellTool,
             name: "Shell tool".to_string(),
             description: "Allow the model to run shell commands.".to_string(),
             enabled: true,
+            max_concurrent_threads_per_session: None,
         },
     ];
     let view = ExperimentalFeaturesView::new(
@@ -3032,6 +3041,7 @@ async fn experimental_features_popup_snapshot() {
             name: "Shell tool".to_string(),
             description: "Allow the model to run shell commands.".to_string(),
             enabled: true,
+            max_concurrent_threads_per_session: None,
         }],
         chat.app_event_tx.clone(),
         keymap.list,
@@ -3052,6 +3062,7 @@ async fn experimental_features_toggle_saves_on_exit() {
             name: "JavaScript REPL".to_string(),
             description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities.".to_string(),
             enabled: false,
+            max_concurrent_threads_per_session: None,
         }],
         chat.app_event_tx.clone(),
         crate::keymap::RuntimeKeymap::defaults().list,
@@ -3071,6 +3082,7 @@ async fn experimental_features_toggle_saves_on_exit() {
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::UpdateFeatureFlags {
             updates: event_updates,
+            ..
         } = event
         {
             updates = Some(event_updates);
@@ -3121,7 +3133,7 @@ async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::Collab, true)]
+        Ok(AppEvent::UpdateFeatureFlags { updates, .. }) if updates == vec![(Feature::Collab, true)]
     );
     let cell = match rx.try_recv() {
         Ok(AppEvent::InsertHistoryCell(cell)) => cell,
@@ -3152,7 +3164,7 @@ async fn memories_enable_prompt_updates_feature_without_notice() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::MemoryTool, true)]
+        Ok(AppEvent::UpdateFeatureFlags { updates, .. }) if updates == vec![(Feature::MemoryTool, true)]
     );
     assert!(
         rx.try_recv().is_err(),
@@ -4138,6 +4150,7 @@ async fn auto_model_advertising_advanced_effort_opens_reasoning_picker() {
 #[tokio::test]
 async fn feedback_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.spine_feedback_enabled = Some(false);
 
     // Open the feedback category selection popup via slash command.
     chat.dispatch_command(SlashCommand::Feedback);

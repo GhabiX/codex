@@ -4432,7 +4432,7 @@ fn mcp_init_error_display_prompts_for_github_pat() {
 fn mcp_init_error_display_prompts_for_login_when_auth_required() {
     let server_name = "example";
     let expected = format!(
-        "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+        "The {server_name} MCP server is not logged in. Run `spine-codex mcp login {server_name}`."
     );
     let executor_config: McpServerConfig = serde_json::from_value(serde_json::json!({
         "url": "https://example.com/mcp",

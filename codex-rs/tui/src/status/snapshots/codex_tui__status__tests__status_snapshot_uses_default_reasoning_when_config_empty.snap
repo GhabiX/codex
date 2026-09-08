@@ -1,17 +1,18 @@
 ---
 source: tui/src/status/tests.rs
+assertion_line: 1738
 expression: sanitized
 ---
 /status
 
 ╭─────────────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.0.0)                                                   │
+│  >_ Spine Codex (v0.3.2)                                                    │
 │                                                                             │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date               │
 │ information on rate limits and credits                                      │
 │                                                                             │
-│  Remote:           unix:///tmp/codex-home/app-server-control/app-server-    │
-│                    control.sock (v0.133.0)                                  │
+│  Remote:           unix:///tmp/codex-home/spine-app-server-control/app-     │
+│                    server-control.sock (v0.133.0)                           │
 │                                                                             │
 │  Model:            gpt-5.1-codex-max (reasoning medium, summaries auto)     │
 │  Directory: [[workspace]]                                                   │

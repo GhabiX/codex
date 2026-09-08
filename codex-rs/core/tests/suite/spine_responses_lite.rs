@@ -2,12 +2,12 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::StartThreadOptions;
 use codex_features::Feature;
+use codex_history::RolloutItem;
+use codex_history::RolloutLine;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -81,6 +81,73 @@ fn additional_tools(body: &Value) -> Result<Vec<Value>> {
         anyhow::bail!("Responses request should contain additional_tools");
     }
     Ok(tools)
+}
+
+#[test_case::test_case("removed")]
+#[test_case::test_case("malformed")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_uses_saved_spine_tools_after_external_config_changes(
+    source_change: &str,
+) -> Result<()> {
+    let source_dir = tempfile::tempdir()?;
+    let source = source_dir.path().join("spine.toml");
+    std::fs::write(
+        &source,
+        "[tools.open]\ndescription = 'original saved description'\n",
+    )?;
+    let mutable_source = source.clone();
+    let mut builder = spine_test_codex()
+        .with_model("gpt-5.4")
+        .with_model_info_override("gpt-5.4", |model| model.use_responses_lite = true)
+        .with_pre_build_hook(move |home| {
+            let config_path = home.join("config.toml");
+            let config = format!(
+                "spine_config_file = {}\n[spine_snapshot]\nexport_dir = {}\n",
+                json!(source),
+                json!(home.join("snapshots"))
+            );
+            std::fs::write(config_path, config).expect("configure SDK source before ConfigBuilder");
+        });
+    let server = responses::start_mock_server().await;
+    let first = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("snapshot-first"),
+            responses::ev_assistant_message("answer-first", "Saved."),
+            responses::ev_completed("snapshot-first"),
+        ]),
+    )
+    .await;
+    let test = builder.build_with_auto_env(&server).await?;
+    test.submit_turn("capture the SDK configuration").await?;
+    let expected_tools =
+        additional_tools(&first.single_request().body_json()).context("initial sampling tools")?;
+    assert!(serde_json::to_string(&expected_tools)?.contains("original saved description"));
+
+    match source_change {
+        "removed" => std::fs::remove_file(&mutable_source)?,
+        "malformed" => std::fs::write(&mutable_source, "[not valid TOML")?,
+        _ => unreachable!("fixture source mutation"),
+    }
+    builder = builder.with_model_info_override("gpt-5.4", |model| model.use_responses_lite = true);
+    let resumed = builder.restart(&server, &test).await?;
+    let second = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("snapshot-resumed"),
+            responses::ev_assistant_message("answer-resumed", "Restored."),
+            responses::ev_completed("snapshot-resumed"),
+        ]),
+    )
+    .await;
+    resumed
+        .submit_turn("continue with the saved SDK configuration")
+        .await?;
+    assert_eq!(
+        additional_tools(&second.single_request().body_json()).context("resumed sampling tools")?,
+        expected_tools
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -24,8 +24,6 @@ async fn native_codex_test_profile_disables_spine_features_and_model_surfaces() 
     for feature in [Feature::SpineJit, Feature::SpineSpawn] {
         assert!(!test.config.features.enabled(feature));
     }
-    assert!(test.config.spine_config.is_feature_off());
-    assert!(test.config.spine_tools.definitions().is_empty());
 
     test.submit_turn("native profile request").await?;
     let request = response_mock.single_request();
@@ -45,7 +43,16 @@ async fn spine_test_profile_rebuilds_tools_from_typed_feature_config() -> Result
     for feature in [Feature::SpineJit, Feature::SpineSpawn] {
         assert!(test.config.features.enabled(feature));
     }
-    assert!(!test.config.spine_config.is_feature_off());
-    assert!(!test.config.spine_tools.definitions().is_empty());
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-spine-profile", "done"),
+            ev_completed("resp-spine-profile"),
+        ]),
+    )
+    .await;
+    test.submit_turn("Spine profile request").await?;
+    let request = response_mock.single_request().body_json().to_string();
+    assert!(request.contains("spineopen") || request.contains("\"spine\""));
     Ok(())
 }

@@ -16,7 +16,7 @@ SpineCodex 让你的 Codex **在一棵 SpineTree 上工作**：长周期、多�
 
 ### 快速开始
 
-在现有 Codex 环境中安装并直接运行。当前版本基于上游 OpenAI Codex `0.147.0`，你现有的 Codex 配置和工作流无需改变：
+在现有 Codex 环境中安装并直接运行。当前开发分支对齐上游 OpenAI Codex `0.153.4`；已发布版本见[发布记录](https://github.com/GhabiX/SpineCodex/releases)：
 
 ```bash
 npm install -g @spinejit/spine-codex@latest
@@ -35,7 +35,9 @@ Spine Spawn 默认开启。运行 `/experimental` 启用可选的 Memory Project
 | ❌ **反复压缩后发生偏移？**       | ✅ **最小有效上下文，最大专注度。**<br />Spine Runtime 维护 SpineTree，并只为当前 Work Unit 投影所需上下文，让智能体保持专注。              |
 | ❌ **在长任务中失去耐心与专注？** | ✅ **按需递归扩展子智能体。**<br />SpineJIT 让智能体能够按需递归展开为专门的子智能体，为复杂问题引入分治结构和更深的推理。          |
 
-## 更新内容
+## 0.4.1 更新内容
+
+对齐 Codex `0.153.4`，将 Spine SDK 配置快照和历史元数据贯穿采样与恢复。修复分页历史包含小数额度使用率时，并发 Spine 分支无法启动的问题。
 
 ### 即将推出
 
@@ -268,7 +270,7 @@ SpineJIT 技术报告即将发布。
 
 ## 项目
 
-SpineCodex 是独立维护的 [OpenAI Codex CLI](https://github.com/openai/codex)（上游 0.147.0），由
+SpineCodex 是独立维护的 [OpenAI Codex CLI](https://github.com/openai/codex)（上游 0.153.4），由
 [Jiahong Xiang](https://ghabix.github.io) 和
 [Kunqiu Chen](https://camsyn.github.io) 维护。
 

@@ -1,6 +1,12 @@
 name: spine-release
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version for native package validation without publication."
+        required: true
+        type: string
   push:
     tags:
       - "v*.*.*"
@@ -10,7 +16,7 @@ on:
         description: "Synthetic SemVer for a no-publish rehearsal."
         required: true
         type: string
-        default: "0.1.0-rehearsal.1"
+        default: "0.4.1-rehearsal.1"
 
 concurrency:
   group: spine-release-${{ github.ref }}
@@ -38,7 +44,7 @@ jobs:
           REHEARSAL_VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
             [[ "$GITHUB_REF_TYPE" == "tag" ]]
             [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-alpha\.[0-9]+)?$ ]]
             version="${GITHUB_REF_NAME#v}"
@@ -95,6 +101,10 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-ci
+
+      - name: Validate Unix Desktop launcher
+        shell: bash
+        run: bash -n "${GITHUB_WORKSPACE}/scripts/codex-desktop/start-spinecodex-desktop.command"
 
       - name: Verify native runner architecture
         shell: bash
@@ -302,6 +312,18 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-ci
+
+      - name: Validate Windows Desktop launcher
+        shell: powershell
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          $launcher = Join-Path $env:GITHUB_WORKSPACE "scripts/codex-desktop/start-spinecodex-desktop.ps1"
+          [System.Management.Automation.Language.Parser]::ParseFile($launcher, [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | Format-List | Out-String | Write-Error
+            exit 1
+          }
 
       - name: Verify native runner architecture
         shell: powershell

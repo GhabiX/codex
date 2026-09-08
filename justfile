@@ -179,7 +179,7 @@ write-config-schema:
 
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
-    cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- {args}
+    {{ python }} ../scripts/write_app_server_schema.py {args}
 
 [no-cd]
 write-hooks-schema:

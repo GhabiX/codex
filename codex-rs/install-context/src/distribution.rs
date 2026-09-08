@@ -3,9 +3,9 @@ use crate::InstallMethod;
 pub const PRODUCT_NAME: &str = "SpineCodex";
 pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CLI_COMMAND: &str = "spine-codex";
-pub const CODEX_COMPAT_VERSION: &str = "0.147.0";
-pub const CODEX_UPSTREAM_TAG: &str = "rust-v0.147.0";
-pub const CODEX_UPSTREAM_COMMIT: &str = "be6e8eac029b183056b7e4402879f15d2c85f61b";
+pub const CODEX_COMPAT_VERSION: &str = "0.153.4";
+pub const CODEX_UPSTREAM_TAG: &str = "rust-v0.153.4";
+pub const CODEX_UPSTREAM_COMMIT: &str = "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a";
 pub const NPM_PACKAGE: &str = "@spinejit/spine-codex";
 pub const NPM_PACKAGE_LATEST: &str = "@spinejit/spine-codex@latest";
 pub const NPM_GLOBAL_UPDATE_ARGS: &[&str] = &["install", "-g", NPM_PACKAGE_LATEST];
@@ -28,7 +28,7 @@ pub const VERSION_CACHE_FILENAME: &str = "spine-codex-version.json";
 pub fn supports_automatic_update(method: &InstallMethod) -> bool {
     matches!(
         method,
-        InstallMethod::Npm | InstallMethod::Bun | InstallMethod::Pnpm
+        InstallMethod::Npm | InstallMethod::Bun | InstallMethod::VitePlus | InstallMethod::Pnpm
     )
 }
 

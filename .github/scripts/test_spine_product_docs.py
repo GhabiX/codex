@@ -28,7 +28,9 @@ class SpineProductDocsTest(unittest.TestCase):
     def test_readmes_follow_package_and_release_metadata(self) -> None:
         package, binary, repository = package_metadata()
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        product_version = tomllib.loads(CARGO_TOML.read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+        product_version = tomllib.loads(CARGO_TOML.read_text(encoding="utf-8"))[
+            "workspace"
+        ]["package"]["version"]
 
         self.assertRegex(workflow, r"(?m)^name: spine-release$")
         self.assertIn('- "v*.*.*"', workflow)
@@ -71,9 +73,7 @@ class SpineProductDocsTest(unittest.TestCase):
                 for link in links
                 if not link.startswith(("http://", "https://", "mailto:"))
             }
-            missing = sorted(
-                link for link in local_links if not (ROOT / link).exists()
-            )
+            missing = sorted(link for link in local_links if not (ROOT / link).exists())
             self.assertEqual(missing, [], readme_path.name)
 
 

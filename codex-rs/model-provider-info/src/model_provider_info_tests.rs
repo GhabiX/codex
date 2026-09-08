@@ -151,7 +151,7 @@ fn openai_provider_uses_codex_compat_version_header() {
     let headers = provider.http_headers.expect("OpenAI provider headers");
 
     assert_eq!(
-        headers.get("version").map(String::as_str),
+        headers.get("version").map(|value| value.as_str()),
         Some(codex_install_context::distribution::CODEX_COMPAT_VERSION)
     );
 }

@@ -26,6 +26,7 @@ use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_install_context::distribution::CLI_COMMAND;
 use codex_install_context::distribution::CODEX_COMPAT_VERSION;
+#[cfg(not(debug_assertions))]
 use codex_install_context::distribution::GITHUB_LATEST_RELEASE_API_URL as GITHUB_LATEST_RELEASE_URL;
 use codex_install_context::distribution::PRODUCT_NAME;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
@@ -3884,7 +3885,7 @@ mod tests {
                 insta::assert_snapshot!(lines.join("\n"), @"
                 Token usage: total=2 input=0 output=2
                 To continue this session, run:
-                  codex resume 123e4567-e89b-12d3-a456-426614174000
+                  spine-codex resume 123e4567-e89b-12d3-a456-426614174000
                 ");
             }
         }
@@ -3917,8 +3918,8 @@ mod tests {
         insta::assert_snapshot!(lines.join("\n"), @"
         Token usage: total=2 input=0 output=2
         To continue this session, run:
-          codex resume 123e4567-e89b-12d3-a456-426614174000
-        Or run codex resume and select my-thread.
+          spine-codex resume 123e4567-e89b-12d3-a456-426614174000
+        Or run spine-codex resume and select my-thread.
         ");
     }
 

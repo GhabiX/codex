@@ -163,7 +163,7 @@ impl McpProcess {
                 "serverInfo": {
                     "name": "codex-mcp-server",
                     "title": "Codex",
-                    "version": "0.0.0",
+                    "version": env!("CARGO_PKG_VERSION"),
                     "user_agent": user_agent
                 },
                 "protocolVersion": ProtocolVersion::V_2025_03_26

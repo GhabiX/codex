@@ -53,6 +53,7 @@ impl ChatWidget {
                     child: cell,
                     top: 1,
                     right: active_cell_right_reserve,
+                    persistent_layout: None,
                 })),
             );
         }

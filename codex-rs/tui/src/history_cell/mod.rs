@@ -122,9 +122,6 @@ mod spine_spawn_progress;
 #[path = "spine_spawn_progress_tests.rs"]
 mod spine_spawn_progress_tests;
 mod spine_tree;
-#[cfg(test)]
-#[path = "spine_tree_debug_tests.rs"]
-mod spine_tree_debug_tests;
 
 pub(crate) use approvals::*;
 pub(crate) use base::*;

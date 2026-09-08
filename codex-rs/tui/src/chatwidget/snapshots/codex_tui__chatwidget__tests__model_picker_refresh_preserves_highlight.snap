@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 3400
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Model and Effort
-  Access legacy models by running codex -m <model_name> or in your config.toml
+  Legacy models: spine-codex -m <model_name> or config.toml
 
 › 1. gpt-5.5            Frontier model for complex coding, research, and real-
                         world work.

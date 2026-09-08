@@ -4,11 +4,11 @@ use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::rate_limits::NUDGE_MODEL_SLUG;
 use crate::chatwidget::rate_limits::get_limits_duration;
 use codex_app_server_protocol::SpendControlLimitSnapshot;
-use codex_app_server_protocol::ThreadUsage;
 use codex_app_server_protocol::SpineTreeNode;
 use codex_app_server_protocol::SpineTreeNodeKind;
 use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
+use codex_app_server_protocol::ThreadUsage;
 use pretty_assertions::assert_eq;
 use ratatui::backend::TestBackend;
 use serial_test::serial;
@@ -3864,6 +3864,7 @@ impl crate::workspace_command::WorkspaceCommandExecutor for NoopWorkspaceCommand
 async fn interrupted_turn_clears_visible_running_hook() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
+    chat.bottom_pane.set_organic_working_word(Some("Kindling"));
 
     handle_hook_started(
         &mut chat,
@@ -3891,6 +3892,7 @@ async fn interrupted_turn_clears_visible_running_hook() {
 async fn completed_turn_clears_visible_running_hook() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
+    chat.bottom_pane.set_organic_working_word(Some("Kindling"));
 
     handle_hook_started(
         &mut chat,
@@ -5255,6 +5257,7 @@ async fn running_hooks_fit_around_background_activity_and_finish_without_history
     ] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.on_task_started();
+        chat.bottom_pane.set_organic_working_word(Some("Kindling"));
         begin_unified_exec_startup(&mut chat, "call-1", "proc-1", "sleep 2");
         chat.bottom_pane.hide_status_indicator();
 

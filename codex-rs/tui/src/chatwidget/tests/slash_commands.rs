@@ -121,13 +121,21 @@ fn next_copy_selection(
 }
 
 #[tokio::test]
-async fn agent_slash_aliases_only_open_the_native_picker() {
-    for command in [SlashCommand::Agent, SlashCommand::MultiAgents] {
+async fn agent_slash_commands_open_their_native_views() {
+    for command in [SlashCommand::Agents, SlashCommand::MultiAgents] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
         chat.dispatch_command(command);
 
-        assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker));
+        match command {
+            SlashCommand::Agents => {
+                assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentsOverview))
+            }
+            SlashCommand::MultiAgents => {
+                assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker))
+            }
+            _ => unreachable!("only agent navigation commands are tested"),
+        }
         assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     }
 }

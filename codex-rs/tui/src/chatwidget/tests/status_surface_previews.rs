@@ -1,11 +1,11 @@
 use super::*;
 use crate::bottom_pane::preview_line_for_title_items;
 use crate::chatwidget::ThreadUsageOutcome;
-use codex_app_server_protocol::ThreadUsage;
 use codex_app_server_protocol::SpineTreeNode;
 use codex_app_server_protocol::SpineTreeNodeKind;
 use codex_app_server_protocol::SpineTreeNodeStatus;
 use codex_app_server_protocol::SpineTreeUpdatedNotification;
+use codex_app_server_protocol::ThreadUsage;
 use pretty_assertions::assert_eq;
 use ratatui::text::Line;
 

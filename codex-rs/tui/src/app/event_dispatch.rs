@@ -5,14 +5,13 @@
 
 use super::rate_limit_refresh::RateLimitReadStatus;
 use super::rate_limit_refresh::RateLimitRefreshOutcome;
-use super::resize_reflow::trailing_run_start;
 use super::resize_reflow::is_automatic_spine_tree_history;
 use super::resize_reflow::trailing_stream_start_across_spine_history;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_event::RecapTrigger;
-use crate::app_event::ThreadTitleDestination;
 use crate::app_event::SpineProjectionEvent;
+use crate::app_event::ThreadTitleDestination;
 use crate::app_server_session::ForkGoalContinuation;
 use crate::app_server_session::UnsupportedLegacyPermissionProfile;
 use crate::app_server_session::turn_permissions_overrides;

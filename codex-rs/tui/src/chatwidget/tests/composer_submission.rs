@@ -85,6 +85,7 @@ async fn hidden_shell_paste_queued_during_turn_submits_literal_prompt() {
         let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.thread_id = Some(ThreadId::new());
         handle_turn_started(&mut chat, "turn-1");
+        chat.bottom_pane.set_organic_working_word(Some("Kindling"));
         let payload = paste_hidden_shell_payload(&mut chat);
 
         chat.handle_key_event(KeyEvent::new(key, KeyModifiers::NONE));

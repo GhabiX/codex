@@ -272,15 +272,7 @@ impl ThreadEventStore {
             return;
         }
 
-        self.buffer
-            .push_back(ThreadBufferedEvent::FeedbackSubmission(event));
-        if self.buffer.len() > self.capacity
-            && let Some(removed) = self.buffer.pop_front()
-            && let ThreadBufferedEvent::Request(request) = &removed
-        {
-            self.pending_interactive_replay
-                .note_evicted_server_request(request.as_ref());
-        }
+        self.push_buffered_event(ThreadBufferedEvent::FeedbackSubmission(event));
     }
 
     /// Clone replay state, then consume the one-shot failed draft when this

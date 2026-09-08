@@ -128,14 +128,13 @@ fn non_preview_activity_does_not_stay_on_waiting_placeholder() {
             status: CollabAgentStatus::Running,
         }],
     });
-    let notification = ServerNotification::CommandExecutionOutputDelta(
-        CommandExecutionOutputDeltaNotification {
+    let notification =
+        ServerNotification::CommandExecutionOutputDelta(CommandExecutionOutputDeltaNotification {
             thread_id: "child".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "command".to_string(),
             delta: "output".to_string(),
-        },
-    );
+        });
 
     assert!(overlay.seed_activity("child", [notification].into_iter()));
     let rendered = plain_lines(overlay.display_lines("  ", true, 80, false))
@@ -181,6 +180,8 @@ fn non_last_activity_connector_matches_the_tree_separator() {
                         text: "first task activity".to_string(),
                         phase: None,
                         memory_citation: None,
+                        delivery: None,
+                        questions: None,
                     },
                     thread_id: "child-0".to_string(),
                     turn_id: "turn-1".to_string(),
@@ -228,6 +229,8 @@ fn activity_refresh_keeps_the_newest_four_lines() {
                 text: format!("activity {index}"),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
+                questions: None,
             },
             thread_id: "child".to_string(),
             turn_id: "turn-1".to_string(),
@@ -276,6 +279,8 @@ fn activity_preview_is_identical_with_or_without_animations() {
                 text: text.to_string(),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
+                questions: None,
             },
             thread_id: "child".to_string(),
             turn_id: "turn-1".to_string(),
@@ -565,6 +570,8 @@ fn first_safe_activity_promotes_pending_task_to_running() {
             text: "child produced activity".to_string(),
             phase: None,
             memory_citation: None,
+            delivery: None,
+            questions: None,
         },
         thread_id: "child".to_string(),
         turn_id: "turn-1".to_string(),
@@ -626,6 +633,8 @@ fn generic_child_failure_waits_for_normalized_progress() {
             text: "child produced activity".to_string(),
             phase: None,
             memory_citation: None,
+            delivery: None,
+            questions: None,
         },
         thread_id: "child".to_string(),
         turn_id: "turn-1".to_string(),
@@ -719,6 +728,8 @@ fn narrow_width_preserves_tree_prefixes_and_fixed_activity_rows() {
                 text: format!("activity {index} with a long description"),
                 phase: None,
                 memory_citation: None,
+                delivery: None,
+                questions: None,
             },
             thread_id: "child".to_string(),
             turn_id: "turn-1".to_string(),
@@ -844,6 +855,8 @@ fn completed_message(text: &str) -> ServerNotification {
             text: text.to_string(),
             phase: None,
             memory_citation: None,
+            delivery: None,
+            questions: None,
         },
         thread_id: "child".to_string(),
         turn_id: "turn-1".to_string(),

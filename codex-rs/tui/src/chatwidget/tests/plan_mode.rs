@@ -16,6 +16,7 @@ fn paste_hidden_plan_shell_payload(chat: &mut ChatWidget) -> String {
 fn plan_test_session(thread_id: ThreadId) -> crate::session_state::ThreadSessionState {
     crate::session_state::ThreadSessionState {
         thread_id,
+        spine_feedback_enabled: Some(false),
         forked_from_id: None,
         fork_parent_title: None,
         thread_name: None,
@@ -33,7 +34,6 @@ fn plan_test_session(thread_id: ThreadId) -> crate::session_state::ThreadSession
         collaboration_mode: None,
         personality: None,
         message_history: None,
-        spine_feedback_enabled: Some(false),
         network_proxy: None,
         rollout_path: None,
     }

@@ -169,7 +169,7 @@ async fn initial_session_header_starts_at_the_top_of_the_viewport() {
 
     insta::assert_snapshot!(header.replace(&cwd, &normalized_cwd), @r"
     ╭───────────────────────────────────────╮
-    │ >_ OpenAI Codex (v<VERSION>)              │
+    │ >_ Spine Codex (v<VERSION>)               │
     │                                       │
     │ model:     loading   /model to change │
     │ directory: /tmp/project               │

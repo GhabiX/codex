@@ -822,7 +822,7 @@ fn pretty_display_lines(
                 true,
             )
         });
-    if root_nodes.is_empty() && !(overlays_at_root && !overlays.is_empty()) {
+    if root_nodes.is_empty() && (!overlays_at_root || overlays.is_empty()) {
         lines.push(
             vec![
                 format!("  {}", pretty_branch(true)).dim(),
@@ -3639,7 +3639,7 @@ mod tests {
             codex_app_server_protocol::CollabAgentStatus::Completed,
         );
         let mut state = SpineTreeViewState::default();
-        state.apply_spawn_progress(progress.clone());
+        state.apply_spawn_progress(progress);
 
         let mut committed = snapshot(
             "1",

@@ -12,6 +12,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -437,10 +438,10 @@ async fn build_reverse_completion_fixture(
     ResponseMock,
 )> {
     let server = start_mock_server().await;
-    let _seed_response = mount_sse_once_match(
+    let _seed_response = mount_response_once_match(
         &server,
         |request: &wiremock::Request| body_contains(request, SEED_PARENT_PROMPT),
-        sse(vec![
+        sse_response(sse(vec![
             ev_response_created("seed-response"),
             ev_reasoning_item("seed-reasoning-without-content", &["omitted"], &[]),
             ev_reasoning_item(
@@ -450,7 +451,10 @@ async fn build_reverse_completion_fixture(
             ),
             ev_assistant_message("seed-message", "seed complete"),
             ev_completed("seed-response"),
-        ]),
+        ]))
+        .insert_header("x-codex-primary-used-percent", "12.5")
+        .insert_header("x-codex-primary-window-minutes", "10080")
+        .insert_header("x-codex-primary-reset-at", "1789200718"),
     )
     .await;
     let parent_spawn = mount_sse_once_match(
@@ -505,7 +509,10 @@ async fn build_reverse_completion_fixture(
         ]),
     )
     .await;
-    let test = metadata_v2_spine_builder().build(&server).await?;
+    let test = metadata_v2_spine_builder()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .build_with_auto_env(&server)
+        .await?;
     assert!(test.config.features.enabled(Feature::SpineSpawn));
     assert!(!test.config.features.enabled(Feature::MultiAgentV2));
     let selected_model = test

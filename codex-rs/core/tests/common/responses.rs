@@ -103,6 +103,12 @@ fn assert_turn_id(body: &Value, key: &str, expected: Option<&str>) -> Result<()>
 #[derive(Debug, Clone)]
 pub struct ResponsesRequest(wiremock::Request);
 
+impl From<wiremock::Request> for ResponsesRequest {
+    fn from(request: wiremock::Request) -> Self {
+        Self(request)
+    }
+}
+
 fn is_zstd_encoding(value: &str) -> bool {
     value
         .split(',')

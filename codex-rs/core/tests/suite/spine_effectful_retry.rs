@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_history::RolloutItem;
+use codex_history::RolloutLine;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
@@ -135,16 +135,13 @@ async fn interrupt_after_spine_effect_commits_cancelled_attempt_once() -> Result
     let test = spine_test_codex().build_with_auto_env(&server).await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            codex_protocol::turn_input::TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "commit the Spine effect before interrupting".to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+            }])
+            .with_thread_settings(Default::default()),
+        )
         .await?;
     wait_for_event(&test.codex, |event| {
         matches!(
@@ -153,7 +150,7 @@ async fn interrupt_after_spine_effect_commits_cancelled_attempt_once() -> Result
                 if matches!(
                     &raw.item,
                     codex_protocol::models::ResponseItem::FunctionCallOutput { call_id, .. }
-                        if call_id == "cancelled-open-call"
+                        if call_id.as_deref() == Some("cancelled-open-call")
                 )
         )
     })

@@ -223,6 +223,9 @@ impl RollbackPlanner {
                 self.assign_targeted_record(index, Some(record.turn_id.as_str()));
             }
             RolloutItem::WorldState(_) | RolloutItem::RealtimeItem(_) => {}
+            RolloutItem::SpineSamplingStarted(_) | RolloutItem::SpineTransition(_) => {
+                self.assign_targeted_record(index, self.active_turn_id.clone().as_deref());
+            }
             RolloutItem::SecurityRiskScore(_) => self.record_boundaries[index] = None,
         }
 

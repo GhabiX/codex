@@ -1,11 +1,10 @@
-use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::sync::Arc;
 
+use codex_history::RolloutItem;
+use codex_history::RolloutLine;
 use codex_protocol::protocol::HistoryPosition;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 
 use super::LocalThreadStore;
@@ -80,14 +79,29 @@ pub(super) async fn prepare(
     )
     .await?;
 
-    let history_base = history_base_at_boundary(store, thread_id, boundary, &lineage).await?;
+    let (history_base, complete_history) = match boundary {
+        ForkBoundary::ThroughLatestSpineSamplingStarted => {
+            let sampling = find_spine_sampling_boundary(&lineage).await?;
+            (Some(sampling.position), Some(sampling.complete_history))
+        }
+        ForkBoundary::Latest | ForkBoundary::ThroughTurn(_) | ForkBoundary::BeforeTurn(_) => (
+            history_base_at_boundary(store, thread_id, boundary, &lineage).await?,
+            None,
+        ),
+    };
     drop(source_writer_guard);
-    let model_context = Arc::new(model_context::load_for_fork(lineage, history_base).await?);
+    let startup = model_context::load_for_fork(lineage, history_base).await?;
+    let model_context = Arc::new(startup.model_context);
+    let complete_history = match complete_history {
+        Some(history) => history,
+        None => Arc::new(startup.complete_history),
+    };
 
     Ok(PreparedFork::new(
         thread_id,
         history_base,
         model_context,
+        Some(complete_history),
         source_reservation,
     ))
 }
@@ -116,8 +130,8 @@ pub(super) async fn history_base_at_boundary(
         end_byte_offset: latest_projection_state.next_byte_offset,
     };
     let pool = store.thread_history_db().await?;
-    let (position, complete_history) = match boundary {
-        ForkBoundary::Latest => (latest_position, None),
+    let position = match boundary {
+        ForkBoundary::Latest => latest_position,
         ForkBoundary::ThroughTurn(turn_id) => {
             let row = find_visible_turn(pool, lineage, turn_id.as_str()).await?;
             if row.status == "inProgress" {
@@ -131,18 +145,15 @@ pub(super) async fn history_base_at_boundary(
             let rollout_end_byte_offset = row
                 .rollout_end_byte_offset
                 .ok_or_else(|| missing_turn_position(turn_id.as_str()))?;
-            (
-                HistoryPosition {
-                    thread_id: row.rollout_id,
-                    end_ordinal_exclusive: u64::try_from(rollout_end_ordinal)
-                        .map_err(|_| invalid_turn_position(turn_id.as_str()))?
-                        .checked_add(1)
-                        .ok_or_else(|| invalid_turn_position(turn_id.as_str()))?,
-                    end_byte_offset: u64::try_from(rollout_end_byte_offset)
-                        .map_err(|_| invalid_turn_position(turn_id.as_str()))?,
-                },
-                None,
-            )
+            HistoryPosition {
+                thread_id: row.rollout_id,
+                end_ordinal_exclusive: u64::try_from(rollout_end_ordinal)
+                    .map_err(|_| invalid_turn_position(turn_id.as_str()))?
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_turn_position(turn_id.as_str()))?,
+                end_byte_offset: u64::try_from(rollout_end_byte_offset)
+                    .map_err(|_| invalid_turn_position(turn_id.as_str()))?,
+            }
         }
         ForkBoundary::BeforeTurn(turn_id) => {
             let row = find_source_turn(pool, lineage, turn_id.as_str()).await?;
@@ -154,20 +165,16 @@ pub(super) async fn history_base_at_boundary(
             let rollout_byte_offset = row
                 .rollout_byte_offset
                 .ok_or_else(|| missing_turn_position(turn_id.as_str()))?;
-            (
-                HistoryPosition {
-                    thread_id: row.rollout_id,
-                    end_ordinal_exclusive: u64::try_from(row.rollout_ordinal)
-                        .map_err(|_| invalid_turn_position(turn_id.as_str()))?,
-                    end_byte_offset: u64::try_from(rollout_byte_offset)
-                        .map_err(|_| invalid_turn_position(turn_id.as_str()))?,
-                },
-                None,
-            )
+            HistoryPosition {
+                thread_id: row.rollout_id,
+                end_ordinal_exclusive: u64::try_from(row.rollout_ordinal)
+                    .map_err(|_| invalid_turn_position(turn_id.as_str()))?,
+                end_byte_offset: u64::try_from(rollout_byte_offset)
+                    .map_err(|_| invalid_turn_position(turn_id.as_str()))?,
+            }
         }
         ForkBoundary::ThroughLatestSpineSamplingStarted => {
-            let boundary = find_spine_sampling_boundary(&lineage).await?;
-            (boundary.position, Some(boundary.complete_history))
+            find_spine_sampling_boundary(lineage).await?.position
         }
     };
     let segment_index = lineage
@@ -193,19 +200,7 @@ pub(super) async fn history_base_at_boundary(
         } else {
             Some(position)
         };
-    drop(source_writer_guard);
-    let startup_history = model_context::load_for_fork(lineage, history_base).await?;
-    let model_context = Arc::new(startup_history.model_context);
-    let complete_history =
-        complete_history.or_else(|| Some(Arc::new(startup_history.complete_history)));
-
-    Ok(PreparedFork::new(
-        thread_id,
-        history_base,
-        model_context,
-        complete_history,
-        source_reservation,
-    ))
+    Ok(history_base)
 }
 
 #[derive(Debug)]
@@ -249,14 +244,13 @@ fn find_spine_sampling_boundary_blocking(
     let mut complete_history = vec![RolloutItem::SessionMeta(session_meta)];
     let mut open_sampling = None;
     for segment in lineage.segments() {
-        let file = File::open(segment.rollout_path.as_path()).map_err(|err| {
-            ThreadStoreError::Internal {
+        let file = codex_rollout::open_rollout_seekable_reader(segment.rollout_path.as_path())
+            .map_err(|err| ThreadStoreError::Internal {
                 message: format!(
                     "failed to open sampling-boundary rollout {}: {err}",
                     segment.rollout_path.display()
                 ),
-            }
-        })?;
+            })?;
         let end_byte_offset = match segment.end {
             Some(end) => end.end_byte_offset,
             None => file
@@ -311,14 +305,14 @@ fn find_spine_sampling_boundary_blocking(
             if line.trim().is_empty() {
                 continue;
             }
-            let record: RolloutLine = serde_json::from_str(line.trim_end()).map_err(|err| {
-                ThreadStoreError::InvalidRequest {
+            let record: RolloutLine = serde_json::from_str(line.trim_end())
+                .and_then(codex_rollout::decode_rollout_line)
+                .map_err(|err| ThreadStoreError::InvalidRequest {
                     message: format!(
                         "invalid sampling-boundary record in {}: {err}",
                         segment.rollout_path.display()
                     ),
-                }
-            })?;
+                })?;
             let ordinal = record
                 .ordinal
                 .ok_or_else(|| ThreadStoreError::InvalidRequest {
@@ -351,7 +345,7 @@ fn find_spine_sampling_boundary_blocking(
                 Some(true) => {
                     open_sampling = Some((
                         HistoryPosition {
-                            thread_id: segment.thread_id(),
+                            thread_id: segment.rollout_id(),
                             end_ordinal_exclusive: ordinal.checked_add(1).ok_or_else(|| {
                                 ThreadStoreError::Internal {
                                     message: "sampling-boundary ordinal overflow".to_string(),

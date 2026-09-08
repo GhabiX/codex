@@ -16,8 +16,6 @@ use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TokenCountEvent;
@@ -527,7 +525,7 @@ async fn replays_nested_archived_lineage_from_frozen_prefix() {
         history_position(
             middle_path.as_path(),
             middle_id,
-            /*end_ordinal_exclusive*/ 6,
+            /*end_ordinal_exclusive*/ 9,
         ),
     );
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
@@ -565,6 +563,19 @@ async fn replays_nested_archived_lineage_from_frozen_prefix() {
         serde_json::to_value(&context.items).expect("serialize context"),
         serde_json::to_value(&expected).expect("serialize expected context")
     );
+    let mut expected_complete = expected.clone();
+    expected_complete.insert(1, user_message("root before checkpoint"));
+    let complete = store
+        .load_complete_history(LoadThreadHistoryParams {
+            thread_id: child_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete frozen lineage");
+    assert_eq!(
+        serde_json::to_value(complete.items).expect("serialize complete lineage"),
+        serde_json::to_value(&expected_complete).expect("serialize expected complete lineage")
+    );
     // The same frozen lineage must replay from compressed files, without materializing or
     // accidentally including the archived root's records after the inherited cutoff.
     for path in [&archived_root, &middle_path, &child_path] {
@@ -584,6 +595,18 @@ async fn replays_nested_archived_lineage_from_frozen_prefix() {
     assert_eq!(
         serde_json::to_value(compressed_context.items).expect("serialize compressed context"),
         serde_json::to_value(expected).expect("serialize expected context")
+    );
+    let compressed_complete = store
+        .load_complete_history(LoadThreadHistoryParams {
+            thread_id: child_id,
+            include_archived: false,
+        })
+        .await
+        .expect("load complete compressed frozen lineage");
+    assert_eq!(
+        serde_json::to_value(compressed_complete.items)
+            .expect("serialize compressed complete lineage"),
+        serde_json::to_value(expected_complete).expect("serialize expected complete lineage")
     );
     assert!(
         [archived_root, middle_path, child_path]
@@ -639,12 +662,15 @@ fn set_history_base(path: &Path, history_base: HistoryPosition) {
     let mut lines = contents.lines();
     let mut head: serde_json::Value =
         serde_json::from_str(lines.next().expect("session meta line")).expect("parse head");
+    head["ordinal"] = serde_json::json!(history_base.end_ordinal_exclusive);
     head["payload"]["history_base"] =
         serde_json::to_value(history_base).expect("serialize history base");
     let mut updated = serde_json::to_string(&head).expect("serialize head");
-    for line in lines {
+    for (index, line) in lines.enumerate() {
+        let mut record: RolloutLine = serde_json::from_str(line).expect("parse local delta");
+        record.ordinal = Some(history_base.end_ordinal_exclusive + 1 + index as u64);
         updated.push('\n');
-        updated.push_str(line);
+        updated.push_str(&serde_json::to_string(&record).expect("serialize local delta"));
     }
     updated.push('\n');
     std::fs::write(path, updated).expect("write history base");

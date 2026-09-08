@@ -17730,29 +17730,6 @@
       ],
       "type": "object"
     },
-    "StrictReviewRequiredNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "startedAtMs": {
-          "description": "Unix timestamp (in milliseconds) when this review started.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "startedAtMs",
-        "threadId",
-        "turnId"
-      ],
-      "title": "StrictReviewRequiredNotification",
-      "type": "object"
-    },
     "SpineFeedbackScreenshot": {
       "properties": {
         "pngBase64": {
@@ -18044,6 +18021,29 @@
         "turnId"
       ],
       "title": "SpineTreeUpdatedNotification",
+      "type": "object"
+    },
+    "StrictReviewRequiredNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "startedAtMs": {
+          "description": "Unix timestamp (in milliseconds) when this review started.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "startedAtMs",
+        "threadId",
+        "turnId"
+      ],
+      "title": "StrictReviewRequiredNotification",
       "type": "object"
     },
     "SubAgentActivityKind": {

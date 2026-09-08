@@ -1,5 +1,11 @@
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::process::Stdio;
+#[cfg(unix)]
+use std::time::Duration;
+#[cfg(unix)]
+use tokio::io::AsyncWriteExt;
 
 #[cfg(unix)]
 use anyhow::Context;
@@ -36,16 +42,42 @@ pub(crate) async fn resolved_managed_codex_bin(codex_bin: &Path) -> Result<PathB
 
 #[cfg(unix)]
 pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
-    let output = Command::new(codex_bin)
-        .arg("--version")
-        .output()
-        .await
+    // MCP initialization reports the product identity in both legacy Spine and current
+    // packages. The public CLI --version intentionally reports upstream compatibility.
+    let mut child = Command::new(codex_bin)
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
         .with_context(|| {
             format!(
-                "failed to invoke managed Codex binary {}",
+                "failed to probe managed Codex binary {}",
                 codex_bin.display()
             )
         })?;
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "codex_app_server_daemon", "version": env!("CARGO_PKG_VERSION") }
+        }
+    });
+    let output = tokio::time::timeout(Duration::from_secs(10), async move {
+        let mut stdin = child
+            .stdin
+            .take()
+            .context("product probe stdin was not piped")?;
+        stdin.write_all(format!("{request}\n").as_bytes()).await?;
+        drop(stdin);
+        child.wait_with_output().await.map_err(anyhow::Error::from)
+    })
+    .await
+    .context("timed out reading managed Codex product identity")??;
     if !output.status.success() {
         return Err(anyhow!(
             "managed Codex binary {} exited with status {}",
@@ -60,7 +92,19 @@ pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
             codex_bin.display()
         )
     })?;
-    parse_codex_version(&stdout)
+    let responses = stdout
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<serde_json::Result<Vec<_>>>()
+        .context("managed Codex product probe returned malformed JSON-RPC")?;
+    responses
+        .iter()
+        .find(|response| response["id"] == 1)
+        .and_then(|response| response.pointer("/result/serverInfo/version"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|version| !version.is_empty())
+        .map(str::to_owned)
+        .context("managed Codex MCP initialization did not return a product version")
 }
 
 #[cfg(unix)]
@@ -86,16 +130,6 @@ pub(crate) fn executable_identity_from_bytes(bytes: &[u8]) -> ExecutableIdentity
 
 fn managed_codex_file_name() -> &'static str {
     if cfg!(windows) { "codex.exe" } else { "codex" }
-}
-
-#[cfg(unix)]
-fn parse_codex_version(output: &str) -> Result<String> {
-    let version = output
-        .split_whitespace()
-        .nth(1)
-        .filter(|version| !version.is_empty())
-        .ok_or_else(|| anyhow!("managed Codex version output was malformed"))?;
-    Ok(version.to_string())
 }
 
 #[cfg(all(test, unix))]

@@ -193,6 +193,9 @@ async fn compact_thread(app: &mut TestAppServer, thread_id: &str) -> Result<()> 
         if completed.thread_id == thread_id
             && matches!(completed.item, ThreadItem::ContextCompaction { .. })
         {
+            let finished: codex_app_server_protocol::TurnCompletedNotification =
+                timeout(READ_TIMEOUT, app.read_notification("turn/completed")).await??;
+            assert_eq!(finished.thread_id, thread_id);
             return Ok(());
         }
     }

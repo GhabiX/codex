@@ -4421,6 +4421,14 @@ impl ThreadRequestProcessor {
         stored_thread: StoredThread,
     ) -> Result<(InitialHistory, StoredThread), JSONRPCErrorError> {
         if matches!(stored_thread.history_mode, ThreadHistoryMode::Paginated) {
+            let model_context = self
+                .thread_store
+                .load_latest_model_context(StoreLoadThreadHistoryParams {
+                    thread_id: stored_thread.thread_id,
+                    include_archived: true,
+                })
+                .await
+                .map_err(thread_store_resume_read_error)?;
             let complete_history = self
                 .thread_store
                 .load_complete_history(StoreLoadThreadHistoryParams {
@@ -4430,8 +4438,9 @@ impl ThreadRequestProcessor {
                 .await
                 .map_err(thread_store_resume_read_error)?;
             let history = InitialHistory::Resumed(ResumedHistory {
+                spine_history: Some(Arc::new(complete_history.items)),
                 conversation_id: complete_history.thread_id,
-                history: Arc::new(complete_history.items),
+                history: Arc::new(model_context.items),
                 rollout_path: stored_thread.rollout_path.clone(),
             });
             return Ok((history, stored_thread));
@@ -4534,6 +4543,7 @@ impl ThreadRequestProcessor {
                 ))
             })?;
         Ok(InitialHistory::Resumed(ResumedHistory {
+            spine_history: None,
             conversation_id: thread_id,
             history: Arc::new(history),
             rollout_path: stored_thread.rollout_path.clone(),
@@ -5008,6 +5018,7 @@ impl ThreadRequestProcessor {
                     ForkSnapshot::Interrupted,
                     config,
                     InitialHistory::Resumed(ResumedHistory {
+                        spine_history: None,
                         conversation_id: source_thread_id,
                         history: history_items,
                         rollout_path: source_thread.rollout_path.clone(),
@@ -5089,19 +5100,6 @@ impl ThreadRequestProcessor {
         }
 
         let instruction_sources = forked_thread.legacy_instruction_sources().await;
-
-        // Auto-attach a conversation listener when forking a thread.
-        log_listener_attach_result(
-            self.ensure_conversation_listener(
-                thread_id,
-                request_id.connection_id,
-                /*raw_events_enabled*/ false,
-            )
-            .await,
-            thread_id,
-            request_id.connection_id,
-            "thread",
-        );
 
         let config_snapshot = forked_thread.config_snapshot().await;
         let spine_feedback_enabled =
@@ -5232,6 +5230,19 @@ impl ThreadRequestProcessor {
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
             .await;
+        // Publish the fork response and creation event before draining restored lifecycle events.
+        log_listener_attach_result(
+            self.ensure_conversation_listener(
+                thread_id,
+                connection_id,
+                /*raw_events_enabled*/ false,
+            )
+            .await,
+            thread_id,
+            connection_id,
+            "thread",
+        );
+
         if inherited_goal {
             self.thread_goal_processor
                 .emit_thread_goal_snapshot(thread_id)

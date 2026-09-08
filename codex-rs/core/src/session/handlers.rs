@@ -343,8 +343,21 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+    if let Err(error) = sess
+        .apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+        .await
+    {
+        sess.send_event(
+            turn_context.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: format!("failed to restore rolled-back Spine history: {error}"),
+                codex_error_info: None,
+                misalignment: None,
+            }),
+        )
         .await;
+        return;
+    }
     sess.services
         .thread_extension_data
         .remove::<NodeReplReviewEvidence>();

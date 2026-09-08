@@ -12,6 +12,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::session::spine_snapshot::export_config_lock_if_configured;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -1256,7 +1257,6 @@ impl Session {
                 );
             }
             session_configuration.thread_name = thread_name.clone();
-            validate_config_lock_if_configured(&session_configuration).await?;
             export_config_lock_if_configured(&session_configuration, thread_id).await?;
             let spine_config =
                 crate::spine::session_config::SpineSessionConfig::from_config(config.as_ref());
@@ -1398,7 +1398,9 @@ impl Session {
                     | RolloutItem::WorldState(_)
                     | RolloutItem::RealtimeItem(_)
                     | RolloutItem::TokenUsageRecord(_)
-                    | RolloutItem::SecurityRiskScore(_) => {}
+                    | RolloutItem::SecurityRiskScore(_)
+                    | RolloutItem::SpineSamplingStarted(_)
+                    | RolloutItem::SpineTransition(_) => {}
                 }
             }
             let session_extension_data =
@@ -1637,7 +1639,7 @@ impl Session {
             };
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            Box::pin(sess.record_initial_history(initial_history)).await;
+            Box::pin(sess.record_initial_history(initial_history)).await?;
             if restore_child_window {
                 sess.state.lock().await.restore_auto_compact_window(
                     /*window_number*/ 0,

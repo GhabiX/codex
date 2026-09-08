@@ -4,8 +4,8 @@ use super::coordinator::replay_mode;
 use super::coordinator::with_shared_coordinator;
 use super::session_config::SpineSessionConfig;
 use crate::context_manager::ContextManager;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::RolloutItem;
+use codex_history::ResponseItemEnvelope;
+use codex_history::RolloutItem;
 use codex_protocol::protocol::TokenCountEvent;
 
 pub(crate) struct SessionSpineRuntime {
@@ -24,13 +24,16 @@ impl SessionSpineRuntime {
         })
     }
 
-    pub(crate) fn append_response_items(&mut self, items: &[ResponseItem]) -> Result<(), String> {
+    pub(crate) fn append_response_items(
+        &mut self,
+        items: &[ResponseItemEnvelope],
+    ) -> Result<(), String> {
         let result = with_shared_coordinator(&self.coordinator, |coordinator| {
             coordinator.observe_response_items(items)
         });
         match result {
             Some(Ok(context)) => {
-                self.model_context.replace(context.items);
+                self.model_context.replace_annotated(context.items);
                 Ok(())
             }
             Some(Err(error)) => {
@@ -48,33 +51,34 @@ impl SessionSpineRuntime {
         self.model_context.clone()
     }
 
-    pub(crate) fn observe_token_count(&mut self, event: TokenCountEvent) {
+    pub(crate) fn observe_token_count(&mut self, event: TokenCountEvent, turn_id: &str) {
         with_shared_coordinator(&self.coordinator, |coordinator| {
-            coordinator.observe_token_count(&event)
+            coordinator.observe_token_count(&event, turn_id)
         });
     }
 
-    pub(crate) fn compact_live(
+    pub(crate) fn prepare_compact(
+        &self,
+        replacement_items: &[ResponseItemEnvelope],
+    ) -> Result<super::coordinator::PreparedCanonicalCompact, String> {
+        with_shared_coordinator(&self.coordinator, |coordinator| {
+            coordinator.prepare_compact(replacement_items)
+        })
+        .expect("enabled Spine runtime owns a coordinator")
+        .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn install_compact(
         &mut self,
-        replacement_items: &[ResponseItem],
-    ) -> Result<(), String> {
-        let result = with_shared_coordinator(&self.coordinator, |coordinator| {
-            coordinator.compact_live(replacement_items)
-        });
-        match result {
-            Some(Ok(())) => {
-                self.model_context.replace(replacement_items.to_vec());
-                Ok(())
-            }
-            Some(Err(error)) => {
-                let reason = error.to_string();
-                with_shared_coordinator(&self.coordinator, |coordinator| {
-                    coordinator.latch_durability_fault(reason.clone());
-                });
-                Err(reason)
-            }
-            None => Ok(()),
-        }
+        prepared: super::coordinator::PreparedCanonicalCompact,
+        replacement_items: &[ResponseItemEnvelope],
+    ) {
+        with_shared_coordinator(&self.coordinator, |coordinator| {
+            coordinator.install_compact(prepared);
+        })
+        .expect("enabled Spine runtime owns a coordinator");
+        self.model_context
+            .replace_annotated(replacement_items.to_vec());
     }
 
     pub(crate) fn publish_canonical_compact(&mut self) {
@@ -95,15 +99,15 @@ impl SessionSpineRuntime {
         // barriers then discard obsolete context transitions before the post-compact stream is
         // projected onto raw_history.
         let mut candidate = ContextManager::new();
-        candidate.replace(raw_history.raw_items().to_vec());
+        candidate.replace_annotated(raw_history.annotated_items().to_vec());
         let effective = super::effective_rollout(rollout_items);
         match replay_mode(&effective) {
             Ok(ReplayMode::Native) => {
                 if let Some(result) = with_shared_coordinator(&self.coordinator, |coordinator| {
-                    coordinator.observe_response_items(raw_history.raw_items())
+                    coordinator.observe_response_items(raw_history.annotated_items())
                 }) {
                     match result {
-                        Ok(context) => candidate.replace(context.items),
+                        Ok(context) => candidate.replace_annotated(context.items),
                         Err(error) => {
                             let reason = error.to_string();
                             with_shared_coordinator(&self.coordinator, |coordinator| {
@@ -120,12 +124,12 @@ impl SessionSpineRuntime {
                 let result = with_shared_coordinator(&self.coordinator, |coordinator| {
                     match coordinator.replay_canonical(
                         &effective,
-                        raw_history.raw_items(),
+                        raw_history.annotated_items(),
                         thread,
                         records,
                     ) {
                         Ok(installed) => {
-                            candidate.replace(installed.context.items.clone());
+                            candidate.replace_annotated(installed.context.items.clone());
                             coordinator.publish_canonical_sampling(&installed);
                             Ok(())
                         }
@@ -153,7 +157,7 @@ impl SessionSpineRuntime {
         Ok(())
     }
 
-    pub(crate) fn install_model_context(&mut self, items: Vec<ResponseItem>) {
-        self.model_context.replace(items);
+    pub(crate) fn install_model_context(&mut self, items: Vec<ResponseItemEnvelope>) {
+        self.model_context.replace_annotated(items);
     }
 }

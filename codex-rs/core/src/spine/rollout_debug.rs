@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use codex_history::RolloutItem;
+use codex_history::RolloutLine;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -12,8 +14,6 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 use serde::de::DeserializeSeed;
@@ -42,6 +42,11 @@ pub(crate) enum DebugRolloutRecord {
         scope: DebugPlaceholderScope,
     },
     OversizedRedacted,
+    TokenUsageRecord {
+        usage: DebugTokenUsage,
+    },
+    SecurityRiskScore,
+    RealtimeItem,
     SessionMeta {
         session_id: u64,
         thread_id: u64,
@@ -154,7 +159,7 @@ pub(crate) enum DebugResponseItem {
     },
     FunctionCallOutput {
         id: Option<u64>,
-        call_id: u64,
+        call_id: Option<u64>,
         output: DebugToolOutput,
         turn_id: Option<u64>,
     },
@@ -905,7 +910,7 @@ impl RolloutDebugRedactor {
                 }
             }
             RolloutItem::ResponseItem(item) => DebugRolloutRecord::ResponseItem {
-                item: self.redact_response_item(item, raw_payload),
+                item: self.redact_response_item(item.item, raw_payload),
             },
             RolloutItem::InterAgentCommunication(item) => {
                 DebugRolloutRecord::InterAgentCommunication {
@@ -936,7 +941,7 @@ impl RolloutDebugRedactor {
                         .enumerate()
                         .map(|(index, item)| {
                             self.redact_response_item(
-                                item,
+                                item.item,
                                 raw_replacements.and_then(|items| items.get(index)),
                             )
                         })
@@ -962,6 +967,11 @@ impl RolloutDebugRedactor {
             RolloutItem::EventMsg(event) => DebugRolloutRecord::Event {
                 event: redact_event(event),
             },
+            RolloutItem::TokenUsageRecord(record) => DebugRolloutRecord::TokenUsageRecord {
+                usage: debug_token_usage(record.usage),
+            },
+            RolloutItem::SecurityRiskScore(_) => DebugRolloutRecord::SecurityRiskScore,
+            RolloutItem::RealtimeItem(_) => DebugRolloutRecord::RealtimeItem,
             RolloutItem::SpineSamplingStarted(_) | RolloutItem::SpineTransition(_) => {
                 DebugRolloutRecord::UnknownRedacted {
                     scope: DebugPlaceholderScope::TopLevel,
@@ -1084,9 +1094,10 @@ impl RolloutDebugRedactor {
                 call_id,
                 output,
                 internal_chat_message_metadata_passthrough,
+                ..
             } => {
-                let local_call_id = self.local_id(IdNamespace::Call, &call_id);
-                let state = self.calls.remove(&local_call_id);
+                let local_call_id = self.optional_local_id(IdNamespace::Call, call_id.as_deref());
+                let state = local_call_id.and_then(|id| self.calls.remove(&id));
                 let debug_output =
                     self.redact_tool_output(state, &output.body, raw_output_value(raw));
                 DebugResponseItem::FunctionCallOutput {
@@ -1994,6 +2005,9 @@ fn redact_event(event: EventMsg) -> DebugEvent {
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
         | EventMsg::CollabResumeEnd(_)
+        | EventMsg::AuthRecoveryStarted(_)
+        | EventMsg::AuthRecoveryCompleted(_)
+        | EventMsg::ThreadQueueChanged(_)
         | EventMsg::SubAgentActivity(_) => {}
     }
     debug
@@ -2085,6 +2099,9 @@ fn event_kind(event: &EventMsg) -> &'static str {
         EventMsg::CollabResumeBegin(_) => "collab_resume_begin",
         EventMsg::CollabResumeEnd(_) => "collab_resume_end",
         EventMsg::SubAgentActivity(_) => "sub_agent_activity",
+        EventMsg::AuthRecoveryStarted(_) => "auth_recovery_started",
+        EventMsg::AuthRecoveryCompleted(_) => "auth_recovery_completed",
+        EventMsg::ThreadQueueChanged(_) => "thread_queue_changed",
     }
 }
 

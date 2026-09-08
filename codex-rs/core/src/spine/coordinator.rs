@@ -5,9 +5,10 @@ use super::context_plan::prepare_codex_context_plan;
 use super::memory_projection::SpinetreeUserMessageProjectionEntry;
 use super::observer::CodexSpineObserverHandler;
 use crate::session::session::Session;
+use codex_history::ResponseItemEnvelope;
+use codex_history::RolloutItem;
+use codex_history::SpineTransitionItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SpineTransitionItem;
 use spine_core::host::CanonicalReplay;
 use spine_core::host::ContextEpoch;
 use spine_core::host::ContextWindowSample;
@@ -30,11 +31,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod archive;
+mod compact;
+pub(crate) use compact::PreparedCanonicalCompact;
 mod replay;
 mod session;
 
 pub(crate) use archive::CoordinatorError;
 pub(crate) use archive::ReplayMode;
+use archive::ReplaySeedItem;
 pub(crate) use archive::decode_spine_rollout_item;
 use archive::encode_spine_sampling_started;
 use archive::encode_spine_transition;
@@ -78,7 +82,8 @@ pub(crate) struct CodexSpineCoordinator {
     pub(crate) runtime: SamplingRuntime,
     runtime_config: SpineConfig,
     next_boundary: u64,
-    source_items: BTreeMap<spine_core::host::SourceCellId, ResponseItem>,
+    source_items: BTreeMap<spine_core::host::SourceCellId, ResponseItemEnvelope>,
+    replay_seed: Option<Vec<ReplaySeedItem>>,
     node_prompt: String,
     pub(crate) durability_fault: Option<String>,
     observer: CodexSpineObserverHandler,
@@ -107,6 +112,7 @@ impl CodexSpineCoordinator {
             runtime_config: config,
             next_boundary: 0,
             source_items: BTreeMap::new(),
+            replay_seed: Some(Vec::new()),
             node_prompt,
             durability_fault: None,
             observer,
@@ -118,7 +124,7 @@ impl CodexSpineCoordinator {
 
     pub(crate) fn observe_response_items(
         &mut self,
-        items: &[ResponseItem],
+        items: &[ResponseItemEnvelope],
     ) -> Result<PreparedCodexContextPlan, CoordinatorError> {
         self.require_healthy()?;
         let mut characters = Vec::with_capacity(items.len());
@@ -127,6 +133,12 @@ impl CodexSpineCoordinator {
             let boundary = RawBoundary(self.next_boundary);
             self.next_boundary = self.next_boundary.saturating_add(1);
             let (character, projected) = response_item_to_char_and_source(item, boundary);
+            if let Some(seed) = &mut self.replay_seed {
+                seed.push(ReplaySeedItem::Source {
+                    boundary: boundary.0,
+                    item: RolloutItem::ResponseItem(item.clone()),
+                });
+            }
             characters.push(character);
             projected_items.push(projected);
         }
@@ -174,13 +186,25 @@ impl CodexSpineCoordinator {
         &mut self,
         attempt: &SpineSamplingAttempt,
         prompt: &[ResponseItem],
-    ) -> Result<codex_protocol::protocol::SpineSamplingStartedItem, CoordinatorError> {
+    ) -> Result<codex_history::SpineSamplingStartedItem, CoordinatorError> {
         let encoded = serde_json::to_vec(prompt)
             .map_err(|error| CoordinatorError::Codec(error.to_string()))?;
         let record = self
             .runtime
             .sampling_started_record(attempt, RecordDigest::digest(&encoded))?;
-        encode_spine_sampling_started(&record)
+        let mut started = encode_spine_sampling_started(&record)?;
+        started.sdk_config = Some(
+            self.runtime_config
+                .snapshot_toml()
+                .map_err(|error| CoordinatorError::Codec(error.to_string()))?,
+        );
+        if let Some(seed) = self.replay_seed.take() {
+            started.replay_seed = Some(
+                serde_json::to_value(seed)
+                    .map_err(|error| CoordinatorError::Codec(error.to_string()))?,
+            );
+        }
+        Ok(started)
     }
 
     pub(crate) fn abort_sampling(
@@ -245,6 +269,7 @@ impl CodexSpineCoordinator {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) fn current_input_tokens(&self) -> Option<i64> {
         self.runtime
             .current_input_tokens()
@@ -302,7 +327,7 @@ impl CodexSpineCoordinator {
             .items
             .iter()
             .rev()
-            .find_map(ResponseItem::turn_id);
+            .find_map(|item| item.item.turn_id());
         self.observer.publish_committed(
             &commit.projection,
             &self.usage_samples,
@@ -322,56 +347,21 @@ impl CodexSpineCoordinator {
         );
     }
 
-    pub(crate) fn compact_live(
-        &mut self,
-        replacement_items: &[ResponseItem],
-    ) -> Result<(), CoordinatorError> {
-        self.require_healthy()?;
-        let epoch = self.runtime.epoch();
-        let next_epoch = epoch.checked_next().ok_or_else(|| {
-            CoordinatorError::Identity("Spine context epoch is exhausted".to_string())
-        })?;
-        let boundary = RawBoundary(self.next_boundary);
-        let replacement_boundaries = (0..replacement_items.len())
-            .scan(boundary.0, |next, _| {
-                *next = next.saturating_add(1);
-                Some(RawBoundary(*next))
-            })
-            .collect::<Vec<_>>();
-        let barrier = SpineCompactBarrierV1::new(
-            self.runtime.thread().clone(),
-            epoch,
-            next_epoch,
-            boundary,
-            replacement_boundaries.clone(),
-        )
-        .map_err(|error| CoordinatorError::Archive(error.to_string()))?;
-        self.runtime.compact(barrier)?;
-        self.next_boundary = replacement_boundaries.last().map_or_else(
-            || boundary.0.saturating_add(1),
-            |boundary| boundary.0.saturating_add(1),
-        );
-        self.source_items = self
-            .runtime
-            .source_snapshot()
-            .cells()
-            .iter()
-            .map(|cell| cell.id.clone())
-            .zip(replacement_items.iter().cloned())
-            .collect();
-        // User messages are a session-level projection. A compact replacement may
-        // omit older messages from the live prompt, but it must not erase them
-        // from the inspectable session history.
-        Ok(())
-    }
-
     pub(crate) fn observe_token_count(
         &mut self,
         event: &codex_protocol::protocol::TokenCountEvent,
+        turn_id: &str,
     ) {
         let Some(info) = event.info.as_ref() else {
             return;
         };
+        if let Some(seed) = &mut self.replay_seed {
+            seed.push(ReplaySeedItem::Usage {
+                boundary: self.next_boundary,
+                input_tokens: info.last_token_usage.input_tokens,
+                model_context_window: info.model_context_window,
+            });
+        }
         if let Some(model_context_window) = info.model_context_window {
             self.record_context_window(model_context_window);
         }
@@ -380,7 +370,7 @@ impl CodexSpineCoordinator {
             input_tokens: info.last_token_usage.input_tokens,
         });
         self.observer
-            .publish_usage(self.runtime.projection(), &self.usage_samples, None);
+            .publish_usage(self.runtime.projection(), &self.usage_samples, turn_id);
     }
 
     pub(crate) fn record_context_window(&mut self, model_context_window: i64) {

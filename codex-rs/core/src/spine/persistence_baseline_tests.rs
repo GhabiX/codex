@@ -1,5 +1,5 @@
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SpineTransitionItem;
+use codex_history::RolloutItem;
+use codex_history::SpineTransitionItem;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_rollout::is_persisted_rollout_item;
 use pretty_assertions::assert_eq;

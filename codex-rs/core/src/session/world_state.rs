@@ -55,6 +55,11 @@ impl Session {
         } else {
             model_instructions
         };
+        let model_instructions = turn_context
+            .config
+            .spine
+            .sdk()
+            .extend_system_prompt(&model_instructions);
         let base_instructions = self.get_prompt_base_instructions().await.text;
         let (previous_model, previous_context, base_instructions) = {
             let state = self.state.lock().await;
@@ -77,11 +82,6 @@ impl Session {
                 base_instructions,
             )
         };
-        let model_instructions = turn_context.config.spine_config.extend_system_prompt(
-            &turn_context
-                .model_info
-                .get_model_instructions(turn_context.personality),
-        );
         let personality_is_baked = turn_context.model_info().supports_personality()
             && base_instructions == model_instructions;
         let environment_subagents = if turn_context.config.include_environment_context {
@@ -318,7 +318,7 @@ impl Session {
         let mut multi_agent_mode = MultiAgentModeState::new(
             super::multi_agents::effective_multi_agent_mode(turn_context),
         )
-        .with_spine_config(&turn_context.config.spine_config);
+        .with_spine_config(turn_context.config.spine.sdk());
         if let Some(usage_hint_text) =
             super::multi_agents::usage_hint_text(turn_context, &turn_context.session_source)
         {

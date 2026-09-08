@@ -6,9 +6,10 @@ use crate::context::MAX_SPINE_MODEL_ITEM_WIRE_BYTES;
 use crate::context::SpineUserAnchor;
 use crate::context::spine_model_item_wire_bytes;
 use crate::context::validate_spine_model_item;
-use crate::context_manager::truncate_function_output_payload;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
+use codex_utils_output_truncation::truncate_function_output_payload;
 use spine_core::host::ContextCellProvenance;
 use spine_core::host::ContextLabel;
 use spine_core::host::ContextPlanRecipe;
@@ -21,14 +22,14 @@ use thiserror::Error;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PreparedCodexContextPlan {
-    pub(crate) items: Vec<ResponseItem>,
+    pub(crate) items: Vec<ResponseItemEnvelope>,
     pub(crate) user_messages: Vec<SpinetreeUserMessageProjectionEntry>,
 }
 
 pub(crate) fn prepare_codex_context_plan<S>(
     plan: &ContextPlanRecipe,
     source: &S,
-    source_items: &BTreeMap<SourceCellId, ResponseItem>,
+    source_items: &BTreeMap<SourceCellId, ResponseItemEnvelope>,
     node_context_costs: &BTreeMap<NodeId, NodeContextCost>,
     node_prompt: &str,
 ) -> Result<PreparedCodexContextPlan, CodexContextPlanError>
@@ -65,7 +66,8 @@ where
                 CodexContextPlanError(
                     "projected Spine context item rendered no Codex item".to_string(),
                 )
-            })?,
+            })?
+            .into(),
         };
         for label in &cell.labels {
             let ContextLabel::UserAnchor(anchor) = label;
@@ -81,7 +83,7 @@ where
                 let anchor_item: ResponseItem =
                     ContextualUserFragment::into(SpineUserAnchor::new(*anchor));
                 validate_spine_model_item(&anchor_item).map_err(CodexContextPlanError)?;
-                anchor_items.push(anchor_item);
+                anchor_items.push(anchor_item.into());
             }
         }
         if spine_owned {
@@ -90,7 +92,7 @@ where
                 && let Some((bounded_item, bounded_wire_bytes)) =
                     bounded_projected_tool_output(&item)?
             {
-                item = bounded_item;
+                item.item = bounded_item;
                 wire_bytes = bounded_wire_bytes;
             }
             if wire_bytes > MAX_SPINE_MODEL_ITEM_WIRE_BYTES {
@@ -130,9 +132,11 @@ fn bounded_projected_tool_output(
         match &mut candidate {
             ResponseItem::FunctionCallOutput { output, .. }
             | ResponseItem::CustomToolCallOutput { output, .. } => {
-                *output = truncate_function_output_payload(
-                    original_output,
+                *output = original_output.clone();
+                truncate_function_output_payload(
+                    output,
                     TruncationPolicy::Tokens(budget),
+                    codex_utils_audio::estimate_audio_token_count,
                 );
             }
             _ => unreachable!("tool output variant checked above"),

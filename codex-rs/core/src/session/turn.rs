@@ -1469,7 +1469,7 @@ async fn run_sampling_request(
             return Err(err);
         }
 
-        if let Err(error) = handle_retryable_response_stream_error(
+        handle_retryable_response_stream_error(
             &mut retry_state,
             max_retries,
             err,
@@ -1478,10 +1478,7 @@ async fn run_sampling_request(
             &turn_context,
             ResponsesStreamRequest::Sampling,
         )
-        .await
-        {
-            return Err(error);
-        }
+        .await?;
         turn_context.turn_timing_state.record_sampling_retry();
     }
 }

@@ -5,7 +5,7 @@ impl CodexSpineCoordinator {
     pub(crate) fn replay_canonical(
         &mut self,
         effective: &[(usize, &RolloutItem)],
-        native_history: &[ResponseItem],
+        native_history: &[ResponseItemEnvelope],
         replay_thread: ThreadNamespace,
         records: Vec<SamplingArchiveRecord>,
     ) -> Result<InstalledCanonicalCommit, CoordinatorError> {
@@ -19,11 +19,92 @@ impl CodexSpineCoordinator {
         let mut replay_record_thread = replay_thread.clone();
         let continuation_thread = self.runtime.thread().clone();
 
-        for (_, item) in effective {
+        let first_started =
+            effective
+                .iter()
+                .enumerate()
+                .find_map(|(index, (_, item))| match item {
+                    RolloutItem::SpineSamplingStarted(started) => Some((index, started)),
+                    _ => None,
+                });
+        let start_index = if let Some((index, started)) = first_started
+            && let Some(seed) = &started.replay_seed
+        {
+            // Opaque source identity is independent of host presentation. Keep the
+            // persisted envelope (including output budgets) authoritative for it.
+            let persisted_items = effective[..index]
+                .iter()
+                .filter_map(|(_, item)| {
+                    if let RolloutItem::ResponseItem(item) = item {
+                        item.item.id().map(|id| (id, item))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            let seed: Vec<ReplaySeedItem> =
+                serde_json::from_value(seed.clone()).map_err(|error| {
+                    CoordinatorError::Replay(format!("invalid initialization seed: {error}"))
+                })?;
+            for item in seed {
+                match item {
+                    ReplaySeedItem::Source { boundary, item } => {
+                        let item = super::archive::seed_response_item(item)?;
+                        let (character, mut projected) =
+                            response_item_to_char_and_source(&item, RawBoundary(boundary));
+                        if matches!(character, spine_core::host::SpineChar::Opaque { .. })
+                            && let Some(id) = item.item.id()
+                            && let Some(persisted) = persisted_items.get(id)
+                        {
+                            projected = (*persisted).clone();
+                        }
+                        inputs.push(ReplayInput::Source(character));
+                        projected_source_items.push(projected);
+                        next_boundary = boundary.saturating_add(1);
+                    }
+                    ReplaySeedItem::Compact {
+                        barrier,
+                        replacement,
+                    } => {
+                        epoch = barrier.next_epoch;
+                        next_boundary = barrier
+                            .replacement_boundaries
+                            .last()
+                            .map_or(barrier.boundary.0, |boundary| boundary.0)
+                            .saturating_add(1);
+                        inputs.push(ReplayInput::Compact(barrier));
+                        projected_source_items = replacement
+                            .into_iter()
+                            .map(super::archive::seed_response_item)
+                            .collect::<Result<Vec<_>, _>>()?;
+                    }
+                    ReplaySeedItem::Usage {
+                        boundary,
+                        input_tokens,
+                        model_context_window,
+                    } => {
+                        inputs.push(ReplayInput::Usage(TokenUsageSample {
+                            boundary: RawBoundary(boundary),
+                            input_tokens,
+                        }));
+                        if let Some(model_context_window) = model_context_window {
+                            context_window_samples.push(ContextWindowSample {
+                                boundary: RawBoundary(boundary),
+                                model_context_window,
+                            });
+                        }
+                    }
+                }
+            }
+            index
+        } else {
+            0
+        };
+        for (_, item) in &effective[start_index..] {
             let source = match item {
                 RolloutItem::ResponseItem(item) => Some(item.clone()),
                 RolloutItem::InterAgentCommunication(communication) => {
-                    Some(communication.to_model_input_item())
+                    Some(communication.to_model_input_item().into())
                 }
                 _ => None,
             };
@@ -54,15 +135,20 @@ impl CodexSpineCoordinator {
                     let boundary = RawBoundary(next_boundary);
                     let replacement_items =
                         compacted.replacement_history.clone().unwrap_or_else(|| {
-                            vec![ResponseItem::Message {
-                                id: None,
-                                role: "assistant".to_string(),
-                                content: vec![codex_protocol::models::ContentItem::OutputText {
-                                    text: compacted.message.clone(),
-                                }],
-                                phase: None,
-                                internal_chat_message_metadata_passthrough: None,
-                            }]
+                            vec![
+                                ResponseItem::Message {
+                                    id: None,
+                                    role: "assistant".to_string(),
+                                    content: vec![
+                                        codex_protocol::models::ContentItem::OutputText {
+                                            text: compacted.message.clone(),
+                                        },
+                                    ],
+                                    phase: None,
+                                    internal_chat_message_metadata_passthrough: None,
+                                }
+                                .into(),
+                            ]
                         });
                     let replacement_boundaries = (0..replacement_items.len())
                         .scan(boundary.0, |next, _| {
@@ -109,6 +195,9 @@ impl CodexSpineCoordinator {
                 | RolloutItem::InterAgentCommunication(_)
                 | RolloutItem::InterAgentCommunicationMetadata { .. }
                 | RolloutItem::TurnContext(_)
+                | RolloutItem::TokenUsageRecord(_)
+                | RolloutItem::SecurityRiskScore(_)
+                | RolloutItem::RealtimeItem(_)
                 | RolloutItem::WorldState(_)
                 | RolloutItem::EventMsg(_) => {}
             }
@@ -161,6 +250,7 @@ impl CodexSpineCoordinator {
             .zip(projected_source_items)
             .collect();
 
+        self.replay_seed = None;
         self.runtime = runtime;
         self.next_boundary = next_boundary;
         self.source_items = source_items;

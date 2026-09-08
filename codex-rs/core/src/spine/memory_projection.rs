@@ -167,14 +167,29 @@ fn replace_mutable_file(path: &Path, body: &[u8]) -> Result<()> {
 }
 
 fn persist_readonly_file(path: &Path, body: &str) -> Result<()> {
-    match OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(mut file) => {
-            file.write_all(body.as_bytes())
-                .with_context(|| format!("failed to write {}", path.display()))?;
-            file.sync_all()
-                .with_context(|| format!("failed to sync {}", path.display()))?;
-        }
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+    let parent = path
+        .parent()
+        .context("Spine memory path has no parent directory")?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    staged
+        .write_all(body.as_bytes())
+        .with_context(|| format!("failed to stage {}", path.display()))?;
+    let writable_permissions = staged.as_file().metadata()?.permissions();
+    let mut readonly_permissions = writable_permissions.clone();
+    readonly_permissions.set_readonly(true);
+    staged.as_file().set_permissions(readonly_permissions)?;
+    staged.as_file().sync_all()?;
+    // Publish the complete immutable file in one operation. Readers must never observe
+    // the final filename between writing its content and making it read-only.
+    match staged.persist_noclobber(path) {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            // Restore the temporary file's original permissions so cleanup also works on Windows.
+            err.file.as_file().set_permissions(writable_permissions)?;
+            if err.error.kind() != ErrorKind::AlreadyExists {
+                return Err(err.error)
+                    .with_context(|| format!("failed to publish {}", path.display()));
+            }
             if !fs::symlink_metadata(path)?.file_type().is_file() {
                 bail!(
                     "Spine memory projection path already exists and is not a regular file: {}",
@@ -189,17 +204,13 @@ fn persist_readonly_file(path: &Path, body: &str) -> Result<()> {
                     path.display()
                 );
             }
-        }
-        Err(err) => {
-            return Err(err).with_context(|| format!("failed to create {}", path.display()));
+            let mut permissions = fs::metadata(path)?.permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(path, permissions)
+                .with_context(|| format!("failed to mark {} readonly", path.display()))?;
+            Ok(())
         }
     }
-
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_readonly(true);
-    fs::set_permissions(path, permissions)
-        .with_context(|| format!("failed to mark {} readonly", path.display()))?;
-    Ok(())
 }
 
 fn sanitize_summary_for_filename(summary: &str) -> String {

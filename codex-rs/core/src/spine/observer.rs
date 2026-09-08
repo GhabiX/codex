@@ -64,10 +64,10 @@ impl CodexSpineObserverHandler {
         &mut self,
         projection: &spine_core::host::SpineProjection,
         usage_samples: &[spine_core::host::TokenUsageSample],
-        event_id: Option<&str>,
+        event_id: &str,
     ) {
         if self.jit_enabled {
-            self.publish_tree(projection, usage_samples, event_id, &[]);
+            self.publish_tree(projection, usage_samples, Some(event_id), &[]);
         }
     }
 

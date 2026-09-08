@@ -1,35 +1,41 @@
 use super::*;
+use codex_history::CompactedItem;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::WorldStateItem;
 use pretty_assertions::assert_eq;
 
 fn message(role: &str, text: &str) -> RolloutItem {
-    RolloutItem::ResponseItem(ResponseItem::Message {
-        id: None,
-        role: role.to_string(),
-        content: vec![ContentItem::InputText {
-            text: text.to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    })
+    RolloutItem::ResponseItem(
+        ResponseItem::Message {
+            id: None,
+            role: role.to_string(),
+            content: vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    )
 }
 
-fn response_items(effective: &[(usize, &RolloutItem)]) -> Vec<ResponseItem> {
+fn response_items(effective: &[(usize, &RolloutItem)]) -> Vec<codex_history::ResponseItemEnvelope> {
     effective
         .iter()
         .filter_map(|(_, item)| match item {
             RolloutItem::ResponseItem(item) => Some(item.clone()),
             RolloutItem::InterAgentCommunication(communication) => {
-                Some(communication.to_model_input_item())
+                Some(communication.to_model_input_item().into())
             }
             RolloutItem::Compacted(_)
             | RolloutItem::SessionMeta(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::TurnContext(_)
+            | RolloutItem::TokenUsageRecord(_)
+            | RolloutItem::SecurityRiskScore(_)
+            | RolloutItem::RealtimeItem(_)
             | RolloutItem::WorldState(_)
             | RolloutItem::EventMsg(_)
             | RolloutItem::SpineSamplingStarted(_)
@@ -97,7 +103,10 @@ fn non_context_rollout_records_do_not_change_source_ordinals() {
         user,
         RolloutItem::WorldState(WorldStateItem {
             full: true,
-            state: serde_json::json!({"cwd":"/tmp"}),
+            state: serde_json::json!({"cwd":"/tmp"})
+                .as_object()
+                .cloned()
+                .expect("fixture object"),
         }),
         assistant,
     ];
@@ -150,14 +159,16 @@ fn source_span_materializes_native_request_and_output_in_order() {
         internal_chat_message_metadata_passthrough: None,
     };
     let output = ResponseItem::FunctionCallOutput {
+        name: None,
+        namespace: None,
         id: Some(ResponseItemId::from_server("output".to_string())),
-        call_id: "call".to_string(),
+        call_id: Some("call".to_string()),
         output: FunctionCallOutputPayload::from_text("/tmp".to_string()),
         internal_chat_message_metadata_passthrough: None,
     };
     let rollout = vec![
-        RolloutItem::ResponseItem(request.clone()),
-        RolloutItem::ResponseItem(output.clone()),
+        RolloutItem::ResponseItem(request.clone().into()),
+        RolloutItem::ResponseItem(output.clone().into()),
     ];
     let effective = effective_rollout(&rollout);
 
@@ -196,7 +207,7 @@ fn multimodal_user_item_is_preserved_while_text_is_anchored() {
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     };
-    let rollout = vec![RolloutItem::ResponseItem(item.clone())];
+    let rollout = vec![RolloutItem::ResponseItem(item.clone().into())];
     let effective = effective_rollout(&rollout);
     let projected = materialize_context(
         &[ContextItem::Message {
@@ -221,7 +232,10 @@ fn multimodal_user_item_is_preserved_while_text_is_anchored() {
     let RolloutItem::ResponseItem(effective_item) = effective[0].1 else {
         panic!("expected response item");
     };
-    assert_eq!(effective_item, &item);
+    assert_eq!(
+        effective_item,
+        &codex_history::ResponseItemEnvelope::new(item)
+    );
 }
 
 #[test]
@@ -279,7 +293,11 @@ fn compact_replacement_history_is_materialized_exactly_once() {
         message("user", "old"),
         RolloutItem::Compacted(CompactedItem {
             message: "summary".to_string(),
-            replacement_history: Some(vec![replacement.clone()]),
+            replacement_history: Some(vec![replacement.clone().into()]),
+            guardian_history: None,
+            mcp_resource_origins: None,
+            compaction_response_id: None,
+            latest_token_usage_record: None,
             window_number: Some(1),
             first_window_id: None,
             previous_window_id: None,
@@ -323,7 +341,7 @@ fn closed_memory_user_slot_preserves_the_complete_native_message() {
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     };
-    let rollout = vec![RolloutItem::ResponseItem(item.clone())];
+    let rollout = vec![RolloutItem::ResponseItem(item.clone().into())];
     let effective = effective_rollout(&rollout);
     let owner = spine_core::host::NodeId::root_epoch(1).child(1);
     let projected = materialize_context(

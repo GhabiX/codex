@@ -286,14 +286,16 @@ fn find_spine_sampling_boundary_blocking(
             if line.trim().is_empty() {
                 continue;
             }
-            let record: RolloutLine = serde_json::from_str(line.trim_end()).map_err(|err| {
-                ThreadStoreError::InvalidRequest {
+            // Decode through JSON Value, as the rollout recorder does, so flattened
+            // records preserve decimal values with serde_json/arbitrary_precision.
+            let record: RolloutLine = serde_json::from_str::<serde_json::Value>(line.trim_end())
+                .and_then(serde_json::from_value)
+                .map_err(|err| ThreadStoreError::InvalidRequest {
                     message: format!(
                         "invalid sampling-boundary record in {}: {err}",
                         segment.rollout_path.display()
                     ),
-                }
-            })?;
+                })?;
             let ordinal = record
                 .ordinal
                 .ok_or_else(|| ThreadStoreError::InvalidRequest {

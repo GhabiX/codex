@@ -20,6 +20,66 @@ use crate::local::rollout_lineage::RolloutLineage;
 use crate::local::rollout_lineage::RolloutLineageSegment;
 
 #[tokio::test]
+async fn sampling_boundary_preserves_decimal_rate_limits() {
+    let home = TempDir::new().expect("temp dir");
+    let thread_id = ThreadId::new();
+    let rate_limits: RolloutItem = serde_json::from_value(json!({
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": null,
+            "rate_limits": {
+                "primary": {
+                    "used_percent": 28.0,
+                    "window_minutes": 10080,
+                    "resets_at": 1789200718
+                }
+            }
+        }
+    }))
+    .expect("rate limit event");
+    let started = sampling_started("open");
+    let path = write_rollout(
+        home.path(),
+        thread_id,
+        /*history_base*/ None,
+        /*session_meta_ordinal*/ 0,
+        vec![rate_limits.clone(), started.clone()],
+    );
+    let expected_position = HistoryPosition {
+        thread_id,
+        end_ordinal_exclusive: 3,
+        end_byte_offset: fs::metadata(&path).expect("rollout metadata").len(),
+    };
+    let session_meta = codex_rollout::read_session_meta_line(&path)
+        .await
+        .expect("session metadata");
+    let lineage = RolloutLineage {
+        segments: vec![RolloutLineageSegment {
+            thread_id,
+            rollout_path: path,
+            start_ordinal: 1,
+            end: None,
+        }],
+    };
+
+    let selected = find_spine_sampling_boundary(&lineage)
+        .await
+        .expect("select sampling boundary after rate limit event");
+
+    assert_eq!(selected.position, expected_position);
+    assert_eq!(
+        serde_json::to_value(selected.complete_history.as_ref()).expect("selected history"),
+        serde_json::to_value(vec![
+            RolloutItem::SessionMeta(session_meta),
+            rate_limits,
+            started
+        ])
+        .expect("expected history")
+    );
+}
+
+#[tokio::test]
 async fn selects_latest_uncommitted_sampling_boundary_across_lineage() {
     let home = TempDir::new().expect("temp dir");
     let root_id = ThreadId::new();

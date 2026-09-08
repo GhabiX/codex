@@ -1,5 +1,9 @@
 use super::ContextualUserFragment;
+use codex_context_fragments::AnnotatedContent;
+use codex_context_fragments::set_annotated_content;
+use codex_context_fragments::to_annotated_content;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::MULTI_AGENT_MODE_CLOSE_TAG;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
@@ -31,6 +35,9 @@ impl SpineMultiAgentModeInstructions {
 }
 
 impl ContextualUserFragment for SpineMultiAgentModeInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("multi_agent.mode_instructions".to_string())
+    }
     fn role(&self) -> &'static str {
         "developer"
     }
@@ -51,6 +58,9 @@ impl ContextualUserFragment for SpineMultiAgentModeInstructions {
 macro_rules! impl_fragment {
     ($name:ident, $role:literal, $start:literal, $end:literal) => {
         impl ContextualUserFragment for $name {
+            fn content_kind(&self) -> ContentItemKind {
+                ContentItemKind(concat!("spine.", stringify!($name)).to_string())
+            }
             fn role(&self) -> &'static str {
                 $role
             }
@@ -186,12 +196,19 @@ impl SpineUserAnchor {
         {
             text.insert_str(0, &prefix);
         } else {
-            content.insert(0, ContentItem::InputText { text: prefix });
+            let Some(mut content) = to_annotated_content(item) else {
+                unreachable!("the user message variant was checked before inserting its anchor");
+            };
+            content.insert(0, AnnotatedContent::input_text(prefix, self.content_kind()));
+            set_annotated_content(item, content);
         }
     }
 }
 
 impl ContextualUserFragment for SpineUserAnchor {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("spine.user_anchor".to_string())
+    }
     fn role(&self) -> &'static str {
         "user"
     }

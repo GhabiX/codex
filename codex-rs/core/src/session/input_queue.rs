@@ -954,7 +954,7 @@ mod tests {
                         content,
                         /*trigger_turn*/ false,
                     ),
-                    /*parent_turn_id*/ None,
+                    TurnStartOptions::default(),
                 )
                 .await;
         }
@@ -1010,7 +1010,7 @@ mod tests {
                     "late branch message",
                     /*trigger_turn*/ false,
                 ),
-                /*parent_turn_id*/ None,
+                TurnStartOptions::default(),
             )
             .await;
         input_queue.complete_mailbox_submission("branch-submission", &branch);

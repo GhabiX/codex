@@ -18,13 +18,15 @@ impl SpineSessionConfig {
             features.push(spine_core::host::Feature::Spawn);
         }
         let sdk = config
-            .spine_config
+            .spine
+            .sdk()
             .clone()
             .with_features(features)
             .expect("validated session Spine features must remain valid");
         Self { sdk }
     }
 
+    #[cfg(test)]
     pub(crate) fn disabled() -> Self {
         Self {
             sdk: spine_core::host::SpineConfig::v1(),

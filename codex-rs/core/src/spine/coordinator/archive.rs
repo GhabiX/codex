@@ -1,13 +1,13 @@
 use super::CodexContextPlanError;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SpineSamplingStartedItem;
-use codex_protocol::protocol::SpineTransitionItem;
+use codex_history::RolloutItem;
+use codex_history::SpineSamplingStartedItem;
+use codex_history::SpineTransitionItem;
 use spine_core::host::PlannerError;
 use spine_core::host::SamplingArchiveRecord;
 use spine_core::host::ThreadNamespace;
 use thiserror::Error;
 
-const SPINE_ROLLOUT_VERSION: u32 = 1;
+const SPINE_ROLLOUT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ReplayMode {
@@ -36,6 +36,8 @@ pub(crate) fn encode_spine_sampling_started(
         ));
     }
     Ok(SpineSamplingStartedItem {
+        sdk_config: None,
+        replay_seed: None,
         version: SPINE_ROLLOUT_VERSION,
         payload: encode_record(record)?,
     })
@@ -59,7 +61,7 @@ fn decode_record(
     version: u32,
     payload: &serde_json::Value,
 ) -> Result<SamplingArchiveRecord, CoordinatorError> {
-    if version != SPINE_ROLLOUT_VERSION {
+    if !matches!(version, 1 | SPINE_ROLLOUT_VERSION) {
         return Err(CoordinatorError::UnsupportedVersion(version));
     }
     let encoded =
@@ -136,4 +138,34 @@ pub(crate) enum CoordinatorError {
     UnsupportedVersion(u32),
     #[error("Spine durability is faulted: {0}")]
     DurabilityFaulted(String),
+}
+
+/// Host source initialization preceding the first SDK sampling record.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum ReplaySeedItem {
+    Source {
+        boundary: u64,
+        item: RolloutItem,
+    },
+    Compact {
+        barrier: spine_core::host::SpineCompactBarrierV1,
+        replacement: Vec<RolloutItem>,
+    },
+    Usage {
+        boundary: u64,
+        input_tokens: i64,
+        model_context_window: Option<i64>,
+    },
+}
+
+pub(super) fn seed_response_item(
+    item: RolloutItem,
+) -> Result<codex_history::ResponseItemEnvelope, CoordinatorError> {
+    match item {
+        RolloutItem::ResponseItem(item) => Ok(item),
+        _ => Err(CoordinatorError::Replay(
+            "initialization seed source must contain a response item".to_string(),
+        )),
+    }
 }

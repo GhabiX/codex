@@ -7,10 +7,10 @@ use crate::context_manager::ContextManager;
 use crate::context_manager::is_user_turn_boundary;
 use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
+use codex_history::RolloutItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
 use spine_core::host::ContextItem;
 use spine_core::host::MemorySlot;
 use spine_core::host::Message;
@@ -24,6 +24,7 @@ use spine_core::host::ValidatedTransition;
 use std::collections::BTreeMap;
 
 pub(crate) mod config;
+pub(crate) mod config_snapshot;
 pub(crate) mod context_handler;
 pub(crate) mod context_plan;
 #[cfg(test)]
@@ -75,7 +76,6 @@ pub(crate) fn canonical_projected_item(
 ) -> ResponseItem {
     history
         .raw_items()
-        .iter()
         .find(|candidate| same_projected_identity(candidate, source))
         .cloned()
         .unwrap_or_else(|| source.clone())
@@ -88,8 +88,14 @@ fn same_projected_identity(left: &ResponseItem, right: &ResponseItem) -> bool {
 
     match (left, right) {
         (
-            ResponseItem::FunctionCallOutput { call_id: left, .. },
-            ResponseItem::FunctionCallOutput { call_id: right, .. },
+            ResponseItem::FunctionCallOutput {
+                call_id: Some(left),
+                ..
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: Some(right),
+                ..
+            },
         )
         | (
             ResponseItem::CustomToolCallOutput { call_id: left, .. },
@@ -224,12 +230,15 @@ pub(crate) fn effective_rollout_from_source<'a>(
                         break;
                     };
                     let remove = match item {
-                        RolloutItem::ResponseItem(ResponseItem::Message {
-                            role, content, ..
-                        }) if role == "developer" => is_contextual_dev_message_content(content),
-                        RolloutItem::ResponseItem(ResponseItem::Message {
-                            role, content, ..
-                        }) if role == "user" => is_contextual_user_message_content(content),
+                        RolloutItem::ResponseItem(envelope) => match &envelope.item {
+                            ResponseItem::Message { role, content, .. } if role == "developer" => {
+                                is_contextual_dev_message_content(content)
+                            }
+                            ResponseItem::Message { role, content, .. } if role == "user" => {
+                                is_contextual_user_message_content(content)
+                            }
+                            _ => false,
+                        },
                         RolloutItem::EventMsg(EventMsg::TokenCount(_)) => {
                             scan -= 1;
                             continue;
@@ -440,7 +449,7 @@ fn response_item_at(
         RolloutItem::ResponseItem(item) => Some(
             host_history
                 .map(|history| canonical_projected_item(history, item))
-                .unwrap_or_else(|| item.clone()),
+                .unwrap_or_else(|| item.item.clone()),
         ),
         RolloutItem::InterAgentCommunication(communication) => {
             Some(communication.to_model_input_item())
@@ -471,7 +480,7 @@ fn compact_replacement_at(
         .replacement_history
         .as_ref()?
         .get(replacement_index)
-        .cloned()
+        .map(|envelope| envelope.item.clone())
 }
 
 fn text_message(role: MessageRole, text: String) -> ResponseItem {

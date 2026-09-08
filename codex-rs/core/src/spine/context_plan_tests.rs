@@ -60,7 +60,7 @@ fn canonical_context_preserves_oversized_base_item() {
     let prepared = prepare_codex_context_plan(
         &recipe,
         &snapshot,
-        &BTreeMap::from([(source_id, item)]),
+        &BTreeMap::from([(source_id, item.into())]),
         &BTreeMap::new(),
         "",
     )
@@ -111,14 +111,14 @@ fn user_anchor_is_a_separate_bounded_item_before_an_unchanged_base_source() {
     let prepared = prepare_codex_context_plan(
         &recipe,
         &snapshot,
-        &BTreeMap::from([(source_id, source_item.clone())]),
+        &BTreeMap::from([(source_id, source_item.clone().into())]),
         &BTreeMap::new(),
         "",
     )
     .expect("the bounded anchor must not claim or rewrite the Base source item");
 
     assert_eq!(prepared.items.len(), 2);
-    let ResponseItem::Message { content, .. } = &prepared.items[0] else {
+    let ResponseItem::Message { content, .. } = &prepared.items[0].item else {
         panic!("anchor must be a user message");
     };
     assert_eq!(
@@ -130,7 +130,10 @@ fn user_anchor_is_a_separate_bounded_item_before_an_unchanged_base_source() {
     assert!(
         spine_model_item_wire_bytes(&prepared.items[0]).unwrap() <= MAX_SPINE_MODEL_ITEM_WIRE_BYTES
     );
-    assert_eq!(prepared.items[1], source_item);
+    assert_eq!(
+        prepared.items[1],
+        codex_history::ResponseItemEnvelope::new(source_item)
+    );
     assert!(
         spine_model_item_wire_bytes(&prepared.items[1]).unwrap() > MAX_SPINE_MODEL_ITEM_WIRE_BYTES
     );
@@ -162,8 +165,10 @@ fn canonical_context_preserves_oversized_native_tool_output() {
     .finalize_digest()
     .expect("recipe");
     let item = ResponseItem::FunctionCallOutput {
+        name: None,
+        namespace: None,
         id: None,
-        call_id: "large-output".to_string(),
+        call_id: Some("large-output".to_string()),
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::Text("x".repeat(50_000)),
             success: Some(true),
@@ -173,13 +178,16 @@ fn canonical_context_preserves_oversized_native_tool_output() {
     let prepared = prepare_codex_context_plan(
         &recipe,
         &snapshot,
-        &BTreeMap::from([(source_id, item.clone())]),
+        &BTreeMap::from([(source_id, item.clone().into())]),
         &BTreeMap::new(),
         "",
     )
     .expect("native tool output must remain Base-owned source");
 
-    assert_eq!(prepared.items, vec![item]);
+    assert_eq!(
+        prepared.items,
+        vec![codex_history::ResponseItemEnvelope::new(item)]
+    );
     assert!(
         spine_model_item_wire_bytes(&prepared.items[0]).unwrap() > MAX_SPINE_MODEL_ITEM_WIRE_BYTES
     );

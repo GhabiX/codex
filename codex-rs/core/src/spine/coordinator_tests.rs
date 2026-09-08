@@ -6,6 +6,7 @@ use super::coordinator::SpineSamplingAttempt;
 use super::coordinator::decode_spine_rollout_item;
 use super::coordinator::replay_mode;
 use super::observer::CodexSpineObserverHandler;
+use codex_history::RolloutItem;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -13,7 +14,6 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
@@ -110,7 +110,13 @@ fn install_spawn_sampling(
     call_id: &str,
 ) -> InstalledCanonicalCommit {
     coordinator
-        .observe_response_items(&[message("user", "spawn request")])
+        .observe_response_items(
+            &[message("user", "spawn request")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe spawn prompt source");
     let attempt = begin_sampling_for_test(coordinator).expect("begin spawn sampling");
     coordinator
@@ -126,7 +132,13 @@ fn install_spawn_sampling(
         )
         .expect("stage spawn fact");
     coordinator
-        .observe_response_items(&[message("assistant", "spawn completed")])
+        .observe_response_items(
+            &[message("assistant", "spawn completed")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe spawn sampling source");
     coordinator
         .finish_execution(call_id, true)
@@ -162,8 +174,10 @@ fn open_source() -> [ResponseItem; 2] {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::FunctionCallOutput {
+            name: None,
+            namespace: None,
             id: Some(ResponseItemId::from_server("open-output".to_string())),
-            call_id: "open-call".to_string(),
+            call_id: Some("open-call".to_string()),
             output: FunctionCallOutputPayload {
                 body: FunctionCallOutputBody::Text("Spine open accepted.".to_string()),
                 success: Some(true),
@@ -184,7 +198,7 @@ fn native_tool_items_are_opaque_across_sampling_interruption() {
     ];
 
     coordinator
-        .observe_response_items(&items)
+        .observe_response_items(&items.iter().cloned().map(Into::into).collect::<Vec<_>>())
         .expect("native tool interruption must remain opaque to Spine");
 
     let snapshot = coordinator.runtime.source_snapshot();
@@ -214,14 +228,26 @@ fn canonical_rollout_items() -> Vec<RolloutItem> {
     let mut coordinator = coordinator();
     let user = message("user", "question");
     coordinator
-        .observe_response_items(std::slice::from_ref(&user))
+        .observe_response_items(
+            &(std::slice::from_ref(&user))
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = coordinator.begin_sampling().expect("begin");
     let started = coordinator
         .sampling_started_rollout_item(&attempt, std::slice::from_ref(&user))
         .expect("sampling started");
     coordinator
-        .observe_response_items(&[message("assistant", "answer")])
+        .observe_response_items(
+            &[message("assistant", "answer")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe response source");
     let commit = coordinator
         .prepare_canonical_sampling(attempt)
@@ -258,8 +284,8 @@ fn canonical_replay_mode_fails_closed_for_malformed_or_unsupported_started_recor
 fn canonical_replay_mode_uses_the_rollback_selected_prefix() {
     let started = canonical_rollout_items().remove(0);
     let rollout = vec![
-        RolloutItem::ResponseItem(message("user", "legacy prefix")),
-        RolloutItem::ResponseItem(message("user", "canonical turn")),
+        RolloutItem::ResponseItem(message("user", "legacy prefix").into()),
+        RolloutItem::ResponseItem(message("user", "canonical turn").into()),
         started,
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
@@ -277,11 +303,23 @@ fn canonical_replay_mode_uses_the_rollback_selected_prefix() {
 fn spine_sampling_coordinator_seals_zero_fact_attempt() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
-        .observe_response_items(&[message("assistant", "answer")])
+        .observe_response_items(
+            &[message("assistant", "answer")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe response source");
 
     let commit = coordinator
@@ -301,7 +339,13 @@ fn spine_sampling_coordinator_seals_zero_fact_attempt() {
 fn spine_sampling_coordinator_retry_abort_isolated() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let failed = begin_sampling_for_test(&mut coordinator).expect("begin failed attempt");
     coordinator
@@ -310,7 +354,13 @@ fn spine_sampling_coordinator_retry_abort_isolated() {
 
     let retry = begin_sampling_for_test(&mut coordinator).expect("begin retry");
     coordinator
-        .observe_response_items(&[message("assistant", "answer")])
+        .observe_response_items(
+            &[message("assistant", "answer")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe retry response");
     let commit = coordinator
         .prepare_canonical_sampling(retry)
@@ -339,11 +389,23 @@ fn spine_canonical_equivalence_preserves_ordinary_context() {
     let mut coordinator = coordinator();
     let expected = [message("user", "question"), message("assistant", "answer")];
     coordinator
-        .observe_response_items(&expected[..1])
+        .observe_response_items(
+            &expected[..1]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
-        .observe_response_items(&expected[1..])
+        .observe_response_items(
+            &expected[1..]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe response source");
 
     let commit = coordinator
@@ -362,7 +424,13 @@ fn spine_canonical_equivalence_preserves_ordinary_context() {
 fn spine_canonical_equivalence_uses_explicit_fact_for_transition() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
@@ -380,7 +448,13 @@ fn spine_canonical_equivalence_uses_explicit_fact_for_transition() {
         )
         .expect("stage fact");
     coordinator
-        .observe_response_items(&open_source())
+        .observe_response_items(
+            &open_source()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe transition source");
     coordinator
         .finish_execution("execution-open", true)
@@ -438,7 +512,13 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
         )
         .expect("stage open fact");
     coordinator
-        .observe_response_items(&open_source())
+        .observe_response_items(
+            &open_source()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe open source");
     coordinator
         .finish_execution("open-execution", true)
@@ -463,12 +543,15 @@ fn spawn_settlement_is_local_to_the_live_sampling_commit() {
     let RolloutItem::EventMsg(EventMsg::TokenCount(usage)) = token_count(10_001, 80_000) else {
         panic!("token count helper must produce a token event");
     };
-    coordinator.observe_token_count(&usage);
-    let EventMsg::SpineTreeUpdate(usage_update) = rx_event.try_recv().expect("usage update").msg
-    else {
+    coordinator.observe_token_count(&usage, "usage-turn");
+    let usage_event = rx_event.try_recv().expect("usage update");
+    let EventMsg::SpineTreeUpdate(usage_update) = usage_event.msg else {
         panic!("usage publication must emit a tree update");
     };
-    assert_eq!(usage_update.settled_spawn_call_ids, Vec::<String>::new());
+    assert_eq!(
+        (usage_event.id, usage_update.settled_spawn_call_ids),
+        ("usage-turn".to_string(), Vec::<String>::new())
+    );
 }
 
 #[test]
@@ -476,8 +559,14 @@ fn canonical_replay_does_not_resettle_historical_spawn_calls() {
     let user = message("user", "question");
     let response = message("assistant", "spawn completed");
     let mut live = spawn_coordinator();
-    live.observe_response_items(std::slice::from_ref(&user))
-        .expect("observe prompt source");
+    live.observe_response_items(
+        &(std::slice::from_ref(&user))
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+    )
+    .expect("observe prompt source");
     let attempt = live.begin_sampling().expect("begin spawn sampling");
     let started = live
         .sampling_started_rollout_item(&attempt, std::slice::from_ref(&user))
@@ -492,17 +581,23 @@ fn canonical_replay_does_not_resettle_historical_spawn_calls() {
         spawn_operation(),
     )
     .expect("stage spawn fact");
-    live.observe_response_items(std::slice::from_ref(&response))
-        .expect("observe spawn source");
+    live.observe_response_items(
+        &(std::slice::from_ref(&response))
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+    )
+    .expect("observe spawn source");
     live.finish_execution("spawn-call", true)
         .expect("finish spawn execution");
     let prepared = live
         .prepare_canonical_sampling(attempt)
         .expect("prepare spawn commit");
     let rollout = [
-        RolloutItem::ResponseItem(user),
+        RolloutItem::ResponseItem(user.into()),
         started,
-        RolloutItem::ResponseItem(response),
+        RolloutItem::ResponseItem(response.into()),
         prepared.rollout_item(),
     ];
     let live_commit = live
@@ -530,7 +625,13 @@ fn spine_sampling_commit_is_self_contained() {
     let mut coordinator = coordinator();
     let user = message("user", "question");
     coordinator
-        .observe_response_items(std::slice::from_ref(&user))
+        .observe_response_items(
+            &(std::slice::from_ref(&user))
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
@@ -548,7 +649,13 @@ fn spine_sampling_commit_is_self_contained() {
         )
         .expect("stage fact");
     coordinator
-        .observe_response_items(&open_source())
+        .observe_response_items(
+            &open_source()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe transition source");
     coordinator
         .finish_execution("open-call", true)
@@ -586,7 +693,13 @@ fn spine_sampling_commit_is_self_contained() {
 
     let second = begin_sampling_for_test(&mut coordinator).expect("begin second sampling");
     coordinator
-        .observe_response_items(&[message("assistant", "answer")])
+        .observe_response_items(
+            &[message("assistant", "answer")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe second response");
     let second = coordinator
         .prepare_canonical_sampling(second)
@@ -607,8 +720,14 @@ fn spine_sampling_commit_is_self_contained() {
 fn spine_compatibility_release_replays_and_continues_canonical_rollout() {
     let user = message("user", "question");
     let mut live = coordinator();
-    live.observe_response_items(std::slice::from_ref(&user))
-        .expect("observe prompt source");
+    live.observe_response_items(
+        &(std::slice::from_ref(&user))
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+    )
+    .expect("observe prompt source");
     let attempt = live.begin_sampling().expect("begin");
     let started = live
         .sampling_started_rollout_item(&attempt, std::slice::from_ref(&user))
@@ -625,8 +744,14 @@ fn spine_compatibility_release_replays_and_continues_canonical_rollout() {
         },
     )
     .expect("stage fact");
-    live.observe_response_items(&open_source())
-        .expect("observe transition source");
+    live.observe_response_items(
+        &open_source()
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+    )
+    .expect("observe transition source");
     live.finish_execution("open-call", true)
         .expect("finish execution");
     live.record_context_window(80_000);
@@ -638,12 +763,24 @@ fn spine_compatibility_release_replays_and_continues_canonical_rollout() {
         )
         .expect("prepare canonical commit")
         .expect("completed sampling commit");
-    let mut rollout = vec![RolloutItem::ResponseItem(user), started];
-    rollout.extend(open_source().into_iter().map(RolloutItem::ResponseItem));
+    let mut rollout = vec![RolloutItem::ResponseItem(user.into()), started];
+    rollout.extend(
+        open_source()
+            .into_iter()
+            .map(|item| RolloutItem::ResponseItem(item.into())),
+    );
     rollout.push(prepared.rollout_item());
     rollout.push(token_count(10_001, 80_000));
     let installed = live.install_canonical_sampling(prepared).expect("install");
-    let installed_context = serde_json::to_string(&installed.context.items).expect("context json");
+    let installed_context = serde_json::to_string(
+        &installed
+            .context
+            .items
+            .iter()
+            .map(|envelope| &envelope.item)
+            .collect::<Vec<_>>(),
+    )
+    .expect("context json");
     assert!(installed_context.contains("<spine_node id=\\\"1.1\\\""));
     assert!(!installed_context.contains("Current Remaining Context Windows"));
 
@@ -662,10 +799,24 @@ fn spine_compatibility_release_replays_and_continues_canonical_rollout() {
 
     let continued = resumed.begin_sampling().expect("continue after replay");
     resumed
-        .sampling_started_rollout_item(&continued, &replayed.context.items)
+        .sampling_started_rollout_item(
+            &continued,
+            &replayed
+                .context
+                .items
+                .iter()
+                .map(|envelope| envelope.item.clone())
+                .collect::<Vec<_>>(),
+        )
         .expect("continued sampling started");
     resumed
-        .observe_response_items(&[message("assistant", "answer")])
+        .observe_response_items(
+            &[message("assistant", "answer")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe continued source");
     let continued = resumed
         .prepare_canonical_sampling(continued)
@@ -687,7 +838,13 @@ fn ordinary_observation_and_token_accounting_preserve_the_model_context_prefix()
     let user = message("user", "question");
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(std::slice::from_ref(&user))
+        .observe_response_items(
+            &(std::slice::from_ref(&user))
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
@@ -705,7 +862,13 @@ fn ordinary_observation_and_token_accounting_preserve_the_model_context_prefix()
         )
         .expect("stage fact");
     coordinator
-        .observe_response_items(&open_source())
+        .observe_response_items(
+            &open_source()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe transition source");
     coordinator
         .finish_execution("open-call", true)
@@ -722,7 +885,13 @@ fn ordinary_observation_and_token_accounting_preserve_the_model_context_prefix()
 
     coordinator.record_context_window(40_000);
     let second = coordinator
-        .observe_response_items(&[message("assistant", "follow-up")])
+        .observe_response_items(
+            &[message("assistant", "follow-up")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("ordinary observation");
 
     assert_eq!(&second.items[..first.len()], first.as_slice());
@@ -733,13 +902,22 @@ fn canonical_replay_continues_after_orphan_sampling_started() {
     let user = message("user", "question");
     let mut interrupted = coordinator();
     interrupted
-        .observe_response_items(std::slice::from_ref(&user))
+        .observe_response_items(
+            &(std::slice::from_ref(&user))
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let orphan_attempt = interrupted.begin_sampling().expect("begin orphan sampling");
     let orphan_started = interrupted
         .sampling_started_rollout_item(&orphan_attempt, std::slice::from_ref(&user))
         .expect("orphan sampling started");
-    let mut rollout = vec![RolloutItem::ResponseItem(user.clone()), orphan_started];
+    let mut rollout = vec![
+        RolloutItem::ResponseItem(user.clone().into()),
+        orphan_started,
+    ];
 
     let effective = rollout.iter().enumerate().collect::<Vec<_>>();
     let ReplayMode::Canonical { thread, records } =
@@ -749,21 +927,37 @@ fn canonical_replay_continues_after_orphan_sampling_started() {
     };
     let mut resumed = coordinator();
     let replayed = resumed
-        .replay_canonical(&effective, std::slice::from_ref(&user), thread, records)
+        .replay_canonical(&effective, &[user.clone().into()], thread, records)
         .expect("replay orphan sampling start");
 
     let continued_attempt = resumed.begin_sampling().expect("continue after orphan");
     let continued_started = resumed
-        .sampling_started_rollout_item(&continued_attempt, &replayed.context.items)
+        .sampling_started_rollout_item(
+            &continued_attempt,
+            &replayed
+                .context
+                .items
+                .iter()
+                .map(|envelope| envelope.item.clone())
+                .collect::<Vec<_>>(),
+        )
         .expect("continued sampling started");
     resumed
-        .observe_response_items(&[message("assistant", "answer")])
+        .observe_response_items(
+            &[message("assistant", "answer")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe continued source");
     let prepared = resumed
         .prepare_canonical_sampling(continued_attempt)
         .expect("prepare continued commit");
     rollout.push(continued_started);
-    rollout.push(RolloutItem::ResponseItem(message("assistant", "answer")));
+    rollout.push(RolloutItem::ResponseItem(
+        message("assistant", "answer").into(),
+    ));
     rollout.push(prepared.rollout_item());
     let installed = resumed
         .install_canonical_sampling(prepared)
@@ -817,8 +1011,14 @@ fn canonical_replay_accepts_persisted_reasoning_with_omitted_empty_content() {
     ));
 
     let mut live = coordinator();
-    live.observe_response_items(std::slice::from_ref(&user))
-        .expect("observe prompt source");
+    live.observe_response_items(
+        &(std::slice::from_ref(&user))
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+    )
+    .expect("observe prompt source");
     let attempt = live.begin_sampling().expect("begin");
     let started = live
         .sampling_started_rollout_item(&attempt, std::slice::from_ref(&user))
@@ -835,21 +1035,37 @@ fn canonical_replay_accepts_persisted_reasoning_with_omitted_empty_content() {
         },
     )
     .expect("stage fact");
-    live.observe_response_items(std::slice::from_ref(&reasoning))
-        .expect("observe live reasoning");
-    live.observe_response_items(&open_source())
-        .expect("observe transition source");
+    live.observe_response_items(
+        &(std::slice::from_ref(&reasoning))
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+    )
+    .expect("observe live reasoning");
+    live.observe_response_items(
+        &open_source()
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+    )
+    .expect("observe transition source");
     live.finish_execution("open-call", true)
         .expect("finish execution");
     let prepared = live
         .prepare_canonical_sampling(attempt)
         .expect("prepare canonical commit");
     let mut rollout = vec![
-        RolloutItem::ResponseItem(user),
+        RolloutItem::ResponseItem(user.into()),
         started,
-        RolloutItem::ResponseItem(persisted_reasoning),
+        RolloutItem::ResponseItem(persisted_reasoning.into()),
     ];
-    rollout.extend(open_source().into_iter().map(RolloutItem::ResponseItem));
+    rollout.extend(
+        open_source()
+            .into_iter()
+            .map(|item| RolloutItem::ResponseItem(item.into())),
+    );
     rollout.push(prepared.rollout_item());
     let installed = live.install_canonical_sampling(prepared).expect("install");
 
@@ -880,13 +1096,21 @@ fn canonical_replay_accepts_host_tool_output_presentation_difference() {
         internal_chat_message_metadata_passthrough: None,
     };
     let processed_output = ResponseItem::FunctionCallOutput {
+        name: None,
+        namespace: None,
         id: Some(ResponseItemId::from_server("large-output".to_string())),
-        call_id: "large-call".to_string(),
+        call_id: Some("large-call".to_string()),
         output: FunctionCallOutputPayload::from_text("host-truncated".to_string()),
         internal_chat_message_metadata_passthrough: None,
     };
-    live.observe_response_items(&[request.clone(), processed_output])
-        .expect("observe host-processed source");
+    live.observe_response_items(
+        &[request.clone(), processed_output]
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+    )
+    .expect("observe host-processed source");
     let attempt = live.begin_sampling().expect("begin");
     let started = live
         .sampling_started_rollout_item(&attempt, &[])
@@ -901,14 +1125,16 @@ fn canonical_replay_accepts_host_tool_output_presentation_difference() {
 
     let raw_body = "raw persisted output".repeat(1_000);
     let raw_output = ResponseItem::FunctionCallOutput {
+        name: None,
+        namespace: None,
         id: Some(ResponseItemId::from_server("large-output".to_string())),
-        call_id: "large-call".to_string(),
+        call_id: Some("large-call".to_string()),
         output: FunctionCallOutputPayload::from_text(raw_body),
         internal_chat_message_metadata_passthrough: None,
     };
     let mut rollout = vec![
-        RolloutItem::ResponseItem(request.clone()),
-        RolloutItem::ResponseItem(raw_output.clone()),
+        RolloutItem::ResponseItem(request.clone().into()),
+        RolloutItem::ResponseItem(raw_output.clone().into()),
         started,
     ];
     rollout.push(transition);
@@ -922,7 +1148,13 @@ fn canonical_replay_accepts_host_tool_output_presentation_difference() {
         .replay_canonical(&effective, &expected.context.items, thread, records)
         .expect("replay canonical rollout");
     assert_eq!(replayed.projection, expected.projection);
-    assert_eq!(replayed.context.items, vec![request, raw_output]);
+    assert_eq!(
+        replayed.context.items,
+        vec![
+            codex_history::ResponseItemEnvelope::new(request),
+            codex_history::ResponseItemEnvelope::new(raw_output)
+        ]
+    );
 }
 
 #[test]
@@ -930,7 +1162,13 @@ fn canonical_fork_preserves_prefix_ids_and_uses_child_suffix_namespace() {
     let user = message("user", "question");
     let mut parent = coordinator();
     parent
-        .observe_response_items(std::slice::from_ref(&user))
+        .observe_response_items(
+            &(std::slice::from_ref(&user))
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = parent.begin_sampling().expect("begin");
     let started = parent
@@ -951,7 +1189,13 @@ fn canonical_fork_preserves_prefix_ids_and_uses_child_suffix_namespace() {
         )
         .expect("stage fact");
     parent
-        .observe_response_items(&open_source())
+        .observe_response_items(
+            &open_source()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe transition source");
     parent
         .finish_execution("open-call", true)
@@ -959,8 +1203,12 @@ fn canonical_fork_preserves_prefix_ids_and_uses_child_suffix_namespace() {
     let prepared = parent
         .prepare_canonical_sampling(attempt)
         .expect("prepare parent commit");
-    let mut rollout = vec![RolloutItem::ResponseItem(user), started];
-    rollout.extend(open_source().into_iter().map(RolloutItem::ResponseItem));
+    let mut rollout = vec![RolloutItem::ResponseItem(user.into()), started];
+    rollout.extend(
+        open_source()
+            .into_iter()
+            .map(|item| RolloutItem::ResponseItem(item.into())),
+    );
     rollout.push(prepared.rollout_item());
     let installed = parent
         .install_canonical_sampling(prepared)
@@ -986,7 +1234,13 @@ fn canonical_fork_preserves_prefix_ids_and_uses_child_suffix_namespace() {
         .expect("replay parent prefix");
     let attempt = begin_sampling_for_test(&mut child).expect("continue child");
     child
-        .observe_response_items(&[message("assistant", "child answer")])
+        .observe_response_items(
+            &[message("assistant", "child answer")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe child source");
     let prepared = child
         .prepare_canonical_sampling(attempt)
@@ -1022,7 +1276,13 @@ fn canonical_fork_preserves_prefix_ids_and_uses_child_suffix_namespace() {
 fn spine_sampling_atomic_prepare_is_not_visible_until_install() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
@@ -1040,7 +1300,13 @@ fn spine_sampling_atomic_prepare_is_not_visible_until_install() {
         )
         .expect("stage fact");
     coordinator
-        .observe_response_items(&open_source())
+        .observe_response_items(
+            &open_source()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe transition source");
     coordinator
         .finish_execution("open-call", true)
@@ -1072,7 +1338,13 @@ fn spine_sampling_atomic_prepare_is_not_visible_until_install() {
 fn codex_context_materialization_failure_discards_sdk_candidate() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let open = begin_sampling_for_test(&mut coordinator).expect("begin open");
     coordinator
@@ -1090,7 +1362,13 @@ fn codex_context_materialization_failure_discards_sdk_candidate() {
         )
         .expect("stage open fact");
     coordinator
-        .observe_response_items(&open_source())
+        .observe_response_items(
+            &open_source()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe open source");
     coordinator
         .finish_execution("open-call", true)
@@ -1113,26 +1391,34 @@ fn codex_context_materialization_failure_discards_sdk_candidate() {
         )
         .expect("stage bounded close fact");
     coordinator
-        .observe_response_items(&[
-            ResponseItem::FunctionCall {
-                id: Some(ResponseItemId::from_server("close-request".to_string())),
-                name: "close".to_string(),
-                namespace: Some("spine".to_string()),
-                arguments: r#"{"memory":"finished"}"#.to_string(),
-                call_id: "close-call".to_string(),
-                encrypted_function_args: None,
-                internal_chat_message_metadata_passthrough: None,
-            },
-            ResponseItem::FunctionCallOutput {
-                id: Some(ResponseItemId::from_server("close-output".to_string())),
-                call_id: "close-call".to_string(),
-                output: FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text("closed".to_string()),
-                    success: Some(true),
+        .observe_response_items(
+            &[
+                ResponseItem::FunctionCall {
+                    id: Some(ResponseItemId::from_server("close-request".to_string())),
+                    name: "close".to_string(),
+                    namespace: Some("spine".to_string()),
+                    arguments: r#"{"memory":"finished"}"#.to_string(),
+                    call_id: "close-call".to_string(),
+                    encrypted_function_args: None,
+                    internal_chat_message_metadata_passthrough: None,
                 },
-                internal_chat_message_metadata_passthrough: None,
-            },
-        ])
+                ResponseItem::FunctionCallOutput {
+                    name: None,
+                    namespace: None,
+                    id: Some(ResponseItemId::from_server("close-output".to_string())),
+                    call_id: Some("close-call".to_string()),
+                    output: FunctionCallOutputPayload {
+                        body: FunctionCallOutputBody::Text("closed".to_string()),
+                        success: Some(true),
+                    },
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ]
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect::<Vec<_>>(),
+        )
         .expect("observe close source");
     coordinator
         .finish_execution("close-call", true)
@@ -1148,7 +1434,13 @@ fn codex_context_materialization_failure_discards_sdk_candidate() {
 
     let retry = begin_sampling_for_test(&mut coordinator).expect("begin valid close");
     coordinator
-        .observe_response_items(&[message("assistant", "ordinary retry")])
+        .observe_response_items(
+            &[message("assistant", "ordinary retry")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe retry source");
     install_sampling_for_test(&mut coordinator, retry).expect("runtime remains reusable");
 }
@@ -1157,18 +1449,36 @@ fn codex_context_materialization_failure_discards_sdk_candidate() {
 fn spine_prepared_commit_rejects_racing_source_until_install() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
-        .observe_response_items(&[message("assistant", "answer")])
+        .observe_response_items(
+            &[message("assistant", "answer")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe response source");
     let prepared = coordinator
         .prepare_canonical_sampling(attempt)
         .expect("prepare canonical commit");
 
     assert!(matches!(
-        coordinator.observe_response_items(&[message("assistant", "racing source")]),
+        coordinator.observe_response_items(
+            &[message("assistant", "racing source")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+        ),
         Err(super::coordinator::CoordinatorError::Planner(
             spine_core::host::PlannerError::SamplingCommitPendingInstall
         ))
@@ -1177,7 +1487,13 @@ fn spine_prepared_commit_rejects_racing_source_until_install() {
         .install_canonical_sampling(prepared)
         .expect("install prepared commit");
     coordinator
-        .observe_response_items(&[message("assistant", "source after install")])
+        .observe_response_items(
+            &[message("assistant", "source after install")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("source after install");
 }
 
@@ -1185,12 +1501,27 @@ fn spine_prepared_commit_rejects_racing_source_until_install() {
 fn spine_compact_live_advances_the_epoch_atomically() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "before compact")])
+        .observe_response_items(
+            &[message("user", "before compact")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe source");
     let replacement = [message("assistant", "compact summary")];
-    coordinator
-        .compact_live(&replacement)
-        .expect("compact live context");
+    let previous = coordinator.runtime.projection().clone();
+    let prepared = coordinator
+        .prepare_compact(
+            &replacement
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
+        .expect("prepare compact context");
+    assert_eq!(coordinator.runtime.projection(), &previous);
+    coordinator.install_compact(prepared);
     assert!(
         coordinator
             .runtime
@@ -1205,19 +1536,38 @@ fn spine_compact_live_advances_the_epoch_atomically() {
 fn spine_compact_live_preserves_session_user_message_projection() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "before compact")])
+        .observe_response_items(
+            &[message("user", "before compact")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin sampling");
     coordinator
-        .observe_response_items(&[message("assistant", "answer")])
+        .observe_response_items(
+            &[message("assistant", "answer")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe response source");
     let installed = install_sampling_for_test(&mut coordinator, attempt).expect("install");
     coordinator.publish_canonical_sampling(&installed);
     assert_eq!(coordinator.user_message_projection().len(), 1);
 
-    coordinator
-        .compact_live(&[message("assistant", "compact summary")])
-        .expect("compact live context");
+    let prepared = coordinator
+        .prepare_compact(
+            &[message("assistant", "compact summary")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
+        .expect("prepare compact context");
+    coordinator.install_compact(prepared);
 
     assert_eq!(coordinator.user_message_projection().len(), 1);
     assert_eq!(
@@ -1230,7 +1580,13 @@ fn spine_compact_live_preserves_session_user_message_projection() {
 fn spine_execution_fact_commits_only_after_lifecycle_success() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
@@ -1248,7 +1604,13 @@ fn spine_execution_fact_commits_only_after_lifecycle_success() {
         )
         .expect("stage fact");
     coordinator
-        .observe_response_items(&open_source())
+        .observe_response_items(
+            &open_source()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe transition source");
     coordinator
         .finish_execution("open-call", true)
@@ -1263,7 +1625,13 @@ fn spine_execution_fact_commits_only_after_lifecycle_success() {
 fn spine_execution_fact_is_discarded_when_lifecycle_rejects_result() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
@@ -1281,7 +1649,13 @@ fn spine_execution_fact_is_discarded_when_lifecycle_rejects_result() {
         )
         .expect("stage fact");
     coordinator
-        .observe_response_items(&open_source())
+        .observe_response_items(
+            &open_source()
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe transition source");
     coordinator
         .finish_execution("open-call", false)
@@ -1296,7 +1670,13 @@ fn spine_execution_fact_is_discarded_when_lifecycle_rejects_result() {
 fn spine_sampling_rejects_unfinished_execution_slot() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator
@@ -1318,7 +1698,13 @@ fn spine_sampling_rejects_unfinished_execution_slot() {
 fn spine_sampling_rejects_success_without_staged_fact() {
     let mut coordinator = coordinator();
     coordinator
-        .observe_response_items(&[message("user", "question")])
+        .observe_response_items(
+            &[message("user", "question")]
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
+        )
         .expect("observe prompt source");
     let attempt = begin_sampling_for_test(&mut coordinator).expect("begin");
     coordinator

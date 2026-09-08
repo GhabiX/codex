@@ -18,12 +18,12 @@ use crate::session::PreviousTurnSettings;
 use crate::session::session::SessionConfiguration;
 use crate::session::time_reminder::CurrentTimeReminderState;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
-use codex_history::ResponseItemEnvelope;
-use codex_protocol::SessionId;
-use codex_protocol::ThreadId;
 use crate::spine::coordinator::SharedSpineCoordinator;
 use crate::spine::session_config::SpineSessionConfig;
 use crate::spine::session_runtime::SessionSpineRuntime;
+use codex_history::ResponseItemEnvelope;
+use codex_protocol::SessionId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -109,12 +109,27 @@ impl SessionState {
         I: IntoIterator,
         I::Item: std::ops::Deref<Target = ResponseItem>,
     {
-        let start = self.history.raw_items().len();
+        let start = self.history.annotated_items().len();
         self.history.record_items(items, policy);
         if let Some(spine) = &mut self.spine_runtime {
-            let appended = self.history.raw_items()[start..].to_vec();
+            let appended = self.history.annotated_items()[start..].to_vec();
             if let Err(error) = spine.append_response_items(&appended) {
                 tracing::warn!(%error, "failed to observe Spine source");
+            }
+        }
+    }
+
+    pub(crate) fn record_spine_annotated_items(
+        &mut self,
+        items: &[ResponseItemEnvelope],
+        policy: TruncationPolicy,
+    ) {
+        let start = self.history.annotated_items().len();
+        self.history.record_annotated_items(items, policy);
+        if let Some(spine) = &mut self.spine_runtime {
+            let appended = &self.history.annotated_items()[start..];
+            if let Err(error) = spine.append_response_items(appended) {
+                tracing::error!(%error, "failed to observe Spine source");
             }
         }
     }
@@ -150,28 +165,35 @@ impl SessionState {
             .unwrap_or_else(|| self.history.clone())
     }
 
-    pub(crate) fn replace_history_from_rollout(
+    pub(crate) fn replay_spine_history(
         &mut self,
-        items: Vec<ResponseItem>,
-        reference_context_item: Option<TurnContextItem>,
-        rollout_items: &[codex_protocol::protocol::RolloutItem],
-    ) {
-        self.replace_history(items, reference_context_item);
-        if let Some(spine) = &mut self.spine_runtime
-            && let Err(error) = spine.replay(rollout_items, &self.history)
-        {
-            tracing::error!(%error, "failed to restore Spine rollout");
+        rollout_items: &[codex_history::RolloutItem],
+    ) -> Result<(), String> {
+        if let Some(spine) = &mut self.spine_runtime {
+            spine.replay(rollout_items, &self.history)?;
         }
+        Ok(())
     }
 
     pub(crate) fn prepare_spine_compact(
+        &self,
+        replacement_items: &[ResponseItemEnvelope],
+    ) -> Result<Option<crate::spine::coordinator::PreparedCanonicalCompact>, String> {
+        self.spine_runtime
+            .as_ref()
+            .map(|spine| spine.prepare_compact(replacement_items))
+            .transpose()
+    }
+
+    pub(crate) fn install_spine_compact(
         &mut self,
-        replacement_items: &[ResponseItem],
-    ) -> Result<(), String> {
-        match &mut self.spine_runtime {
-            Some(spine) => spine.compact_live(replacement_items),
-            None => Ok(()),
-        }
+        prepared: crate::spine::coordinator::PreparedCanonicalCompact,
+        replacement_items: &[ResponseItemEnvelope],
+    ) {
+        self.spine_runtime
+            .as_mut()
+            .expect("prepared compact requires an enabled Spine runtime")
+            .install_compact(prepared, replacement_items);
     }
 
     pub(crate) fn publish_spine_compact(&mut self) {
@@ -180,7 +202,7 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn install_spine_model_context(&mut self, items: Vec<ResponseItem>) {
+    pub(crate) fn install_spine_model_context(&mut self, items: Vec<ResponseItemEnvelope>) {
         if let Some(spine) = &mut self.spine_runtime {
             spine.install_model_context(items);
         }
@@ -189,9 +211,10 @@ impl SessionState {
     pub(crate) fn observe_spine_token_count(
         &mut self,
         event: codex_protocol::protocol::TokenCountEvent,
+        turn_id: &str,
     ) {
         if let Some(spine) = &mut self.spine_runtime {
-            spine.observe_token_count(event);
+            spine.observe_token_count(event, turn_id);
         }
     }
 

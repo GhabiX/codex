@@ -51,19 +51,6 @@ impl Drop for SpineExecutionGuard {
 }
 
 impl SpineSessionAdapter {
-    pub(crate) fn from_configuration(
-        enabled: bool,
-        session_id: String,
-        config: SpineConfig,
-    ) -> Result<Self, CoordinatorError> {
-        Self::from_configuration_with_observer(
-            enabled,
-            session_id,
-            config,
-            CodexSpineObserverHandler::default(),
-        )
-    }
-
     pub(crate) fn from_configuration_with_observer(
         enabled: bool,
         session_id: String,
@@ -228,7 +215,10 @@ impl Session {
         Ok(())
     }
 
-    async fn persist_spine_rollout_items(&self, items: &[RolloutItem]) -> anyhow::Result<()> {
+    pub(crate) async fn persist_spine_rollout_items(
+        &self,
+        items: &[RolloutItem],
+    ) -> anyhow::Result<()> {
         let Some(live_thread) = self.live_thread() else {
             return Ok(());
         };
@@ -283,7 +273,7 @@ impl Session {
         self.with_spine_coordinator(|coordinator| coordinator.latch_durability_fault(reason));
     }
 
-    fn latch_spine_error(&self, error: anyhow::Error) -> anyhow::Error {
+    pub(crate) fn latch_spine_error(&self, error: anyhow::Error) -> anyhow::Error {
         self.latch_spine_durability_fault(error.to_string());
         error
     }

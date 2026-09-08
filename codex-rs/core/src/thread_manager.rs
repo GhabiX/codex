@@ -1,3 +1,6 @@
+#[path = "thread_manager_resume_history.rs"]
+mod resume_history;
+
 use crate::CodexAppsToolsCache;
 use crate::agent::AgentControl;
 use crate::attestation::AttestationProvider;
@@ -1273,49 +1276,19 @@ impl ThreadManager {
         &self,
         rollout_path: PathBuf,
     ) -> CodexResult<InitialHistory> {
-        let requested_rollout_path = rollout_path.clone();
-        let stored_thread = match self
+        let metadata = self
             .state
             .thread_store
             .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
                 rollout_path: rollout_path.clone(),
                 include_archived: true,
-                include_history: true,
+                include_history: false,
             })
             .await
-        {
-            Ok(stored_thread) => stored_thread,
-            Err(ThreadStoreError::Unsupported {
-                operation: "paginated_threads",
-            }) => {
-                let stored_thread = self
-                    .state
-                    .thread_store
-                    .read_thread_by_rollout_path(ReadThreadByRolloutPathParams {
-                        rollout_path,
-                        include_archived: true,
-                        include_history: false,
-                    })
-                    .await
-                    .map_err(thread_store_rollout_read_error)?;
-                let complete_history = self
-                    .state
-                    .thread_store
-                    .load_complete_history(LoadThreadHistoryParams {
-                        thread_id: stored_thread.thread_id,
-                        include_archived: true,
-                    })
-                    .await
-                    .map_err(thread_store_rollout_read_error)?;
-                return Ok(InitialHistory::Resumed(ResumedHistory {
-                    conversation_id: complete_history.thread_id,
-                    history: Arc::new(complete_history.items),
-                    rollout_path: Some(requested_rollout_path),
-                }));
-            }
-            Err(err) => return Err(thread_store_rollout_read_error(err)),
-        };
-        stored_thread_to_initial_history(stored_thread, Some(requested_rollout_path))
+            .map_err(thread_store_rollout_read_error)?;
+        let mut history = self.state.load_resumed_history(&metadata).await?;
+        history.rollout_path = Some(rollout_path);
+        Ok(InitialHistory::Resumed(history))
     }
 
     /// Fork an existing thread from already-loaded store history.
@@ -1366,6 +1339,7 @@ impl ThreadManager {
             .as_ref()
             .unwrap_or(&prepared.model_context);
         let history = InitialHistory::Resumed(ResumedHistory {
+            spine_history: None,
             conversation_id: prepared.source_thread_id,
             history: Arc::clone(replay_history),
             rollout_path: None,
@@ -1613,21 +1587,23 @@ impl ThreadManagerState {
         submission_id: String,
         op: Op,
         parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
+            && let Some(captured_op) = capture_test_op(&op)
         {
-            log.push((thread_id, op.clone()));
+            log.push((thread_id, captured_op));
         }
         thread
             .io
             .submit_with_id(Submission {
                 id: submission_id.clone(),
                 op,
-                client_user_message_id: None,
                 trace: None,
                 parent_turn_id,
+                root_turn_id,
             })
             .await?;
         Ok(submission_id)
@@ -2273,6 +2249,7 @@ fn stored_thread_to_initial_history(
         ))
     })?;
     Ok(InitialHistory::Resumed(ResumedHistory {
+        spine_history: None,
         conversation_id: thread_id,
         history: Arc::new(history.items),
         rollout_path: rollout_path.or(stored_thread.rollout_path),
@@ -2405,9 +2382,14 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
 
 fn fork_history_from_snapshot(
     snapshot: ForkSnapshot,
-    history: InitialHistory,
+    mut history: InitialHistory,
     interrupted_marker: InterruptedTurnHistoryMarker,
 ) -> InitialHistory {
+    if let InitialHistory::Resumed(resumed) = &mut history
+        && let Some(complete) = resumed.spine_history.take()
+    {
+        resumed.history = complete;
+    }
     let snapshot_state = snapshot_turn_state(&history);
     match snapshot {
         ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {

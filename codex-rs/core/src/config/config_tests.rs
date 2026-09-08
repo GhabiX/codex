@@ -666,48 +666,6 @@ async fn load_config_resolves_tool_registry_config() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn debug_config_lockfile_load_path_loads_lock_from_nested_table() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let lock_path = codex_home.path().join("session.config.lock.toml");
-    let spine_config = crate::spine::config::lock_snapshot(
-        None,
-        codex_home.path(),
-        Some(codex_home.path()),
-        true,
-    )?;
-    let mut lockfile = crate::config_lock::config_lockfile(ConfigToml::default(), spine_config);
-    lockfile.codex_version = "older-version".to_string();
-    std::fs::write(
-        &lock_path,
-        toml::to_string_pretty(&lockfile).expect("serialize version-2 config lock fixture"),
-    )?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        format!(
-            r#"[debug.config_lockfile]
-load_path = '{}'
-allow_codex_version_mismatch = true
-save_fields_resolved_from_model_catalog = false
-"#,
-            lock_path.display()
-        ),
-    )?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert!(config.config_lock_toml.is_some());
-    assert!(config.config_lock_allow_codex_version_mismatch);
-    assert!(!config.config_lock_save_fields_resolved_from_model_catalog);
-
-    Ok(())
-}
-
-
-#[tokio::test]
 async fn load_config_resolves_token_budget_config() -> std::io::Result<()> {
     for (config_toml, expected) in [
         (

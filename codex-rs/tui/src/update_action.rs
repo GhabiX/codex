@@ -59,7 +59,9 @@ impl UpdateAction {
                 "pnpm",
                 codex_install_context::distribution::PNPM_GLOBAL_UPDATE_ARGS,
             ),
-            UpdateAction::VitePlusGlobalLatest => ("vp", &["install", "-g", "@spinejit/spine-codex"]),
+            UpdateAction::VitePlusGlobalLatest => {
+                ("vp", &["install", "-g", "@spinejit/spine-codex@latest"])
+            }
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",

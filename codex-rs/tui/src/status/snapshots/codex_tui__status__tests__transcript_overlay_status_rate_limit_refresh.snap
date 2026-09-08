@@ -1,6 +1,5 @@
 ---
 source: tui/src/status/tests.rs
-assertion_line: 1885
 expression: "format!(\"before:\\n{before}\\n\\nafter:\\n{after}\")"
 ---
 before:
@@ -8,7 +7,7 @@ before:
 /status
 
 ╭──────────────────────────────────────────────────────────────────────────╮
-│  >_ Spine Codex (v0.3.2)                                                 │
+│  >_ Spine Codex (v0.4.1)                                                 │
 │                                                                          │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date            │
 │ information on rate limits and credits                                   │
@@ -40,7 +39,7 @@ after:
 /status
 
 ╭───────────────────────────────────────────────────────────────────────────╮
-│  >_ Spine Codex (v0.3.2)                                                  │
+│  >_ Spine Codex (v0.4.1)                                                  │
 │                                                                           │
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date             │
 │ information on rate limits and credits                                    │

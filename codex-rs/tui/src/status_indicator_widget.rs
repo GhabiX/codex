@@ -239,8 +239,8 @@ impl StatusIndicator<'_> {
 
         let mut spans = Vec::with_capacity(7);
         let mut organic_activity_word = None;
-        if (self.header == "Working" || self.header_is_reasoning)
-            && let Some(activity_word) = self.organic_working_word
+        if (row.header == "Working" || row.header_is_reasoning)
+            && let Some(activity_word) = row.organic_working_word
         {
             spans.push(" ".into());
             spans.push(green_growth_marker(elapsed_duration, motion_mode));
@@ -248,14 +248,14 @@ impl StatusIndicator<'_> {
             organic_activity_word = Some(activity_word);
         } else {
             if let Some(indicator) = activity_indicator(
-                Some(self.last_resume_at),
+                Some(self.timer.last_resume_at),
                 motion_mode,
                 ReducedMotionIndicator::Hidden,
             ) {
                 spans.push(indicator);
                 spans.push(" ".into());
             }
-            spans.extend(shimmer_text(&self.header, motion_mode));
+            spans.extend(shimmer_text(&row.header, motion_mode));
         }
 
         let mut suffix_spans = Vec::with_capacity(5);
@@ -281,15 +281,15 @@ impl StatusIndicator<'_> {
         }
 
         if let Some(activity_word) = organic_activity_word {
-            if self.header_is_reasoning && !self.header.is_empty() {
+            if row.header_is_reasoning && !row.header.is_empty() {
                 let prefix_width =
                     line_width(&Line::from(spans.clone())) + UnicodeWidthStr::width(activity_word);
                 let suffix_width = line_width(&Line::from(suffix_spans.clone()));
                 let available_width =
-                    usize::from(area.width).saturating_sub(prefix_width + suffix_width);
+                    usize::from(width).saturating_sub(prefix_width + suffix_width);
                 if available_width >= 3 {
                     let title = truncate_line_with_ellipsis_if_overflow(
-                        Line::from(self.header.clone()),
+                        Line::from(row.header.clone()),
                         available_width.saturating_sub(2),
                     );
                     let mut default_text = String::from(": ");
@@ -367,7 +367,11 @@ mod tests {
     fn render_status_line(widget: &StatusIndicatorWidget, width: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("terminal");
         terminal
-            .draw(|frame| widget.render(frame.area(), frame.buffer_mut()))
+            .draw(|frame| {
+                widget
+                    .with_timer(&StatusTimer::default())
+                    .render(frame.area(), frame.buffer_mut())
+            })
             .expect("draw");
         terminal.backend().buffer().content()[..usize::from(width)]
             .iter()
@@ -420,12 +424,14 @@ mod tests {
             /*animations_enabled*/ false,
         );
         widget.set_organic_working_word(Some("Blooming"));
-        widget.is_paused = true;
-        widget.elapsed_running = Duration::ZERO;
 
         let mut terminal = Terminal::new(TestBackend::new(80, 1)).expect("terminal");
         terminal
-            .draw(|frame| widget.render(frame.area(), frame.buffer_mut()))
+            .draw(|frame| {
+                widget
+                    .with_timer(&StatusTimer::default())
+                    .render(frame.area(), frame.buffer_mut())
+            })
             .expect("draw");
         insta::assert_snapshot!(terminal.backend());
 
@@ -439,7 +445,10 @@ mod tests {
             .buffer()
             .cell((3, 0))
             .expect("activity word cell");
-        let expected_green = crate::shimmer::motion_green_style().fg;
+        let expected_green =
+            crate::motion::green_growth_marker(Duration::ZERO, MotionMode::Reduced)
+                .style
+                .fg;
         assert_eq!(marker.style().fg, expected_green);
         assert_eq!(word.style().fg, expected_green);
     }
@@ -458,8 +467,6 @@ mod tests {
             "Planning memory rollout inspection".to_string(),
             /*header_is_reasoning*/ true,
         );
-        widget.is_paused = true;
-        widget.elapsed_running = Duration::ZERO;
 
         insta::assert_snapshot!(
             render_status_line(&widget, /*width*/ 120),
@@ -477,8 +484,6 @@ mod tests {
             /*animations_enabled*/ false,
         );
         widget.set_organic_working_word(Some("Blooming"));
-        widget.is_paused = true;
-        widget.elapsed_running = Duration::ZERO;
 
         widget.update_header(
             "Planning memory rollout inspection".to_string(),
@@ -522,8 +527,6 @@ mod tests {
             "Planning memory rollout inspection".to_string(),
             /*header_is_reasoning*/ true,
         );
-        widget.is_paused = true;
-        widget.elapsed_running = Duration::ZERO;
 
         assert_eq!(
             render_status_line(&widget, /*width*/ 40),

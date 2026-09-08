@@ -1,10 +1,9 @@
 ---
 source: tui/src/history_cell/tests.rs
-assertion_line: 700
 expression: rendered
 ---
 ╭─────────────────────────────────────╮
-│ >_ Spine Codex (v0.3.2)             │
+│ >_ Spine Codex (v0.4.1)             │
 │                                     │
 │ model:     gpt-5   /model to change │
 │ directory: /tmp/project             │

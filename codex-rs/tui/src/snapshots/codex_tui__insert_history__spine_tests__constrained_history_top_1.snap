@@ -1,0 +1,10 @@
+---
+source: tui/src/insert_history_spine_tests.rs
+assertion_line: 43
+expression: "rows.join(\"\\n\")"
+---
+
+history remains visible during branch work
+live: Kindling task
+
+branch work remains active

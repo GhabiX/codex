@@ -10,7 +10,7 @@ async fn chained_config_error_wraps_in_history_snapshot() {
 
     let width = 56;
     let height = 8;
-    let backend = VT100Backend::new_with_scrollback(width, height, /*scrollback_len*/ 16);
+    let backend = VT100Backend::with_scrollback(width, height, /*scrollback_len*/ 16);
     let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
     term.set_viewport_area(ratatui::layout::Rect::new(0, 0, width, height));
     for lines in drain_insert_history(&mut rx) {

@@ -285,6 +285,10 @@ fn agent_activity_summary(item: &ThreadItem) -> Option<String> {
                 CollabAgentTool::ResumeAgent => "Resumed an agent",
                 CollabAgentTool::Wait => "Waited for an agent",
                 CollabAgentTool::CloseAgent => "Closed an agent",
+                CollabAgentTool::SendMessage => "Sent a message to an agent",
+                CollabAgentTool::FollowupTask => "Assigned a follow-up task",
+                CollabAgentTool::InterruptAgent => "Interrupted an agent",
+                CollabAgentTool::ListAgents => "Listed agents",
             };
             return Some(action.to_string());
         }
@@ -293,6 +297,7 @@ fn agent_activity_summary(item: &ThreadItem) -> Option<String> {
                 SubAgentActivityKind::Started => "Started",
                 SubAgentActivityKind::Interacted => "Contacted",
                 SubAgentActivityKind::Interrupted => "Interrupted",
+                SubAgentActivityKind::Completed => "Completed",
             };
             return Some(format!("{action} sub-agent"));
         }
@@ -308,6 +313,7 @@ fn agent_activity_summary(item: &ThreadItem) -> Option<String> {
         ThreadItem::ContextCompaction { .. } => return Some("Compacted context".to_string()),
         ThreadItem::UserMessage { .. }
         | ThreadItem::HookPrompt { .. }
+        | ThreadItem::FunctionCallOutput { .. }
         | ThreadItem::Sleep { .. } => return None,
     };
     bounded_agent_activity_summary(summary)
@@ -595,10 +601,10 @@ pub(crate) fn sub_agent_activity_display(item: &ThreadItem) -> Option<SubAgentAc
     else {
         return None;
     };
-    let is_running_hint = !matches!(
-        kind,
-        SubAgentActivityKind::Interrupted | SubAgentActivityKind::Completed
-    );
+    let is_running_hint = match kind {
+        SubAgentActivityKind::Started | SubAgentActivityKind::Interacted => true,
+        SubAgentActivityKind::Interrupted | SubAgentActivityKind::Completed => false,
+    };
     Some(SubAgentActivityDisplay {
         thread_id: parse_thread_id(agent_thread_id)?,
         agent_path: agent_path.clone(),

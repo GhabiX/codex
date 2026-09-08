@@ -241,8 +241,10 @@ impl ChatWidget {
             });
         }
 
-        let subtitle = format!("Legacy models: {CLI_COMMAND} -m <model_name> or config.toml");
-        let header = self.model_menu_header("Select Model and Effort", &subtitle);
+        let header = self.model_menu_header(
+            "Select Model and Effort",
+            &format!("Legacy models: {CLI_COMMAND} -m <model_name> or config.toml"),
+        );
         self.show_model_selection_view(SelectionViewParams {
             view_id: Some(view_id),
             footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),

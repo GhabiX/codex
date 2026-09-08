@@ -282,6 +282,8 @@ impl App {
                     && self.primary_thread_id != Some(thread_id)
                     && !self.thread_event_channels.contains_key(&thread_id)
                     && self.agent_navigation.get(&thread_id).is_none()
+                    && !self.agent_navigation.is_parent_owned(thread_id)
+                    && !self.settling_spine_spawn_threads.contains_key(&thread_id)
                     && !self.side_threads.contains_key(&thread_id)
                     && !matches!(&notification, ServerNotification::McpServerStatusUpdated(_))
                     && !matches!(

@@ -178,10 +178,7 @@ impl SpineSpawnOverlay {
                     spine_spawn_status(&notification),
                 )
             };
-            let visual = self
-                .visuals
-                .get_mut(thread_id)
-                .expect("known spawn task");
+            let visual = self.visuals.get_mut(thread_id).expect("known spawn task");
             visual.activity_seen = visual
                 .activity
                 .as_ref()
@@ -220,10 +217,7 @@ impl SpineSpawnOverlay {
             );
             (changed, tracker.activity_seen())
         };
-        let visual = self
-            .visuals
-            .get_mut(thread_id)
-            .expect("known spawn task");
+        let visual = self.visuals.get_mut(thread_id).expect("known spawn task");
         visual.activity_seen = activity_seen;
         sync_task_visuals(&self.notification.tasks, &mut self.visuals, Instant::now());
         changed

@@ -18,7 +18,6 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -31,13 +30,22 @@ const SPAWN_CALL_ID: &str = "tui-spawn-call";
 const BRANCH_PROMPT_MARKER: &str = "You are a spawned execution branch.";
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
-    serde_json::from_slice::<Value>(&request.body)
-        .ok()
-        .is_some_and(|body| body.to_string().contains(text))
+    core_test_support::responses::ResponsesRequest::from(request.clone()).body_contains_text(text)
 }
 
 fn child_request(request: &wiremock::Request, marker: &str) -> bool {
-    body_contains(request, BRANCH_PROMPT_MARKER) && body_contains(request, marker)
+    let body = core_test_support::responses::ResponsesRequest::from(request.clone()).body_json();
+    body["input"].as_array().is_some_and(|items| {
+        items.iter().any(|item| {
+            item["role"] == "user"
+                && item["content"].as_array().is_some_and(|content| {
+                    content
+                        .iter()
+                        .filter_map(|part| part["text"].as_str())
+                        .any(|text| text.contains(BRANCH_PROMPT_MARKER) && text.contains(marker))
+                })
+        })
+    })
 }
 
 fn matching_request_count(
@@ -406,7 +414,8 @@ max_concurrent_threads_per_session = 3
             server.uri()
         ),
     )?;
-    let cwd = app.config.cwd.to_path_buf();
+    let workspace = tempdir()?;
+    let cwd = workspace.path().to_path_buf();
     app.config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
@@ -509,6 +518,7 @@ max_concurrent_threads_per_session = 3
                             projection_trace.push(format!("parent turn completed {}", notification.turn.id));
                         }
                         ServerNotification::TurnCompleted(notification) => {
+                            assert_eq!(notification.turn.status, TurnStatus::Completed, "child failed: {:?}", notification.turn.error);
                             child_completion_order.push(notification.thread_id.clone());
                             projection_trace.push(format!(
                                 "child turn completed thread={} turn={}",
@@ -527,7 +537,7 @@ max_concurrent_threads_per_session = 3
                 }
                 app.handle_event(&mut tui, &mut app_server, event).await?;
             }
-            () = &mut timeout => panic!("timed out waiting for embedded Spine Spawn"),
+            () = &mut timeout => panic!("timed out waiting for embedded Spine Spawn: {projection_trace:#?}"),
         }
         projection_trace.extend(
             drain_app_events(&mut app, &mut app_event_rx, &mut tui, &mut app_server).await?,

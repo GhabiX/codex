@@ -5,7 +5,7 @@ expression: "format!(\"before completion:\\n{before_completion}\\nafter completi
 ---
 before completion:
 "                                                                                "
-" . Kindling (0s • esc to interrupt) · Running hook                              "
+" . Working (0s • esc to interrupt) · Running hook                               "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

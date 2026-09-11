@@ -67,3 +67,37 @@ async fn failed_checkpoint_keeps_the_previous_history_and_window() {
         before,
     );
 }
+
+#[tokio::test]
+async fn fork_checkpoint_keeps_parent_guardian_evidence_local() -> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        let _ = config.features.enable(Feature::SpineJit);
+    })
+    .await?;
+    let parent_checkpoint = codex_history::GuardianHistoryCheckpoint(vec![user_message(
+        "parent-local review evidence",
+    )]);
+    session
+        .state
+        .lock()
+        .await
+        .history
+        .restore_guardian_history(Some(&parent_checkpoint));
+    let child_item = user_message("child-visible task");
+    let history = session
+        .checkpoint_spine_fork_context(&[], &[RolloutItem::ResponseItem(child_item.clone().into())])
+        .await;
+    let RolloutItem::Compacted(checkpoint) = &history[0] else {
+        panic!("fork checkpoint");
+    };
+    assert_eq!(checkpoint.guardian_history, None);
+    assert_eq!(
+        checkpoint.replacement_history,
+        Some(vec![child_item.into()])
+    );
+    assert_eq!(
+        session.clone_history().await.guardian_history_checkpoint(),
+        Some(parent_checkpoint)
+    );
+    Ok(())
+}

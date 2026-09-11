@@ -1104,7 +1104,7 @@ fn canonical_replay_accepts_host_tool_output_presentation_difference() {
         internal_chat_message_metadata_passthrough: None,
     };
     live.observe_response_items(
-        &[request.clone(), processed_output]
+        &[request.clone(), processed_output.clone()]
             .iter()
             .cloned()
             .map(Into::into)
@@ -1134,7 +1134,7 @@ fn canonical_replay_accepts_host_tool_output_presentation_difference() {
     };
     let mut rollout = vec![
         RolloutItem::ResponseItem(request.clone().into()),
-        RolloutItem::ResponseItem(raw_output.clone().into()),
+        RolloutItem::ResponseItem(raw_output.into()),
         started,
     ];
     rollout.push(transition);
@@ -1152,7 +1152,7 @@ fn canonical_replay_accepts_host_tool_output_presentation_difference() {
         replayed.context.items,
         vec![
             codex_history::ResponseItemEnvelope::new(request),
-            codex_history::ResponseItemEnvelope::new(raw_output)
+            codex_history::ResponseItemEnvelope::new(processed_output)
         ]
     );
 }

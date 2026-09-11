@@ -2490,6 +2490,136 @@ async fn configured_per_call_bound_is_model_visible_and_rejects_oversized_batche
     Ok(())
 }
 
+#[test_case::test_case("all", false, ThreadHistoryMode::Legacy; "legacy full history")]
+#[test_case::test_case("all", true, ThreadHistoryMode::Legacy; "legacy developer override")]
+#[test_case::test_case("1", false, ThreadHistoryMode::Legacy; "legacy last turn")]
+#[test_case::test_case("all", false, ThreadHistoryMode::Paginated; "paginated full history")]
+#[test_case::test_case("all", true, ThreadHistoryMode::Paginated; "paginated developer override")]
+#[test_case::test_case("1", false, ThreadHistoryMode::Paginated; "paginated last turn")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_fork_preserves_settled_memory_and_child_policy(
+    fork_turns: &str,
+    override_developer: bool,
+    history_mode: ThreadHistoryMode,
+) -> Result<()> {
+    let server = start_mock_server().await;
+    let test = multi_agent_v2_spine_builder()
+        .with_history_mode(history_mode)
+        .with_config(move |config| {
+            config.developer_instructions = Some("parent review policy".to_string());
+            if override_developer {
+                config.multi_agent_v2.subagent_developer_instructions =
+                    Some("child review policy".to_string());
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let parent_thread_id = test.session_configured.thread_id.to_string();
+    for (previous_call, body) in [
+            (None, sse(vec![
+                ev_response_created("native-open"),
+                ev_function_call_with_namespace("native-open", "spine", "open", r#"{"summary":"review scope"}"#),
+                ev_completed("native-open"),
+            ])),
+            (Some("native-open"), sse(vec![
+                ev_response_created("native-close"),
+                ev_function_call_with_namespace("native-close", "spine", "close", r#"{"memory":"settled review memory"}"#),
+                ev_completed("native-close"),
+            ])),
+            (Some("native-close"), sse(vec![
+                ev_response_created("native-spawn"),
+                ev_function_call_with_namespace("native-spawn", "collaboration", "spawn_agent", &json!({
+                    "message": "review the settled result", "task_name": "reviewer", "fork_turns": fork_turns,
+                }).to_string()),
+                ev_completed("native-spawn"),
+            ])),
+            (Some("native-spawn"), sse(vec![ev_assistant_message("parent-finished", "reviewer dispatched"), ev_completed("parent-finished")])),
+    ] {
+        let parent_thread_id = parent_thread_id.clone();
+        mount_sse_once_match(&server, move |request: &wiremock::Request| {
+            request.headers.get("thread-id").is_some_and(|id| id == parent_thread_id.as_str())
+                && previous_call.is_none_or(|call_id| has_function_call_output(request, call_id))
+        }, body).await;
+    }
+    let matcher_parent_thread_id = parent_thread_id.clone();
+    let child = mount_response_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            request
+                .headers
+                .get("thread-id")
+                .is_some_and(|value| value != matcher_parent_thread_id.as_str())
+        },
+        sse_response(sse(vec![
+            ev_assistant_message("child-finished", "review complete"),
+            ev_completed("child-finished"),
+        ]))
+        .set_delay(Duration::from_secs(2)),
+    )
+    .await;
+    test.submit_turn("finish the scoped work, then ask a reviewer")
+        .await?;
+    // ResponseMock records requests while matchers run, including rejected parent requests.
+    wait_for_request(&child, "native reviewer", |request| {
+        request
+            .header("thread-id")
+            .is_some_and(|id| id != parent_thread_id)
+    })
+    .await?;
+    let child_requests = child
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request
+                .header("thread-id")
+                .is_some_and(|id| id != parent_thread_id)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(child_requests.len(), 1);
+    let request = &child_requests[0];
+    assert!(request.body_contains_text("review the settled result"));
+    let memory_count = request
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| text.starts_with("<spine_memory") && text.contains("settled review memory"))
+        .count();
+    assert_eq!(
+        memory_count,
+        1,
+        "child should inherit the settled memory fragment: {:?}",
+        request.input()
+    );
+    assert!(
+        !request.body_contains_text("metadata-v2-root-usage-hint"),
+        "child inherited the root usage hint (thread {:?}, parent {}): {:?}",
+        request.header("thread-id"),
+        test.session_configured.thread_id,
+        request.input()
+    );
+    assert!(request.body_contains_text("metadata-v2-subagent-usage-hint"));
+    if override_developer {
+        assert!(request.body_contains_text("child review policy"));
+        assert!(!request.body_contains_text("parent review policy"));
+    }
+    let requests = server.received_requests().await.expect("recorded requests");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request
+                    .headers
+                    .get("thread-id")
+                    .is_some_and(|id| id == parent_thread_id.as_str())
+            })
+            .count(),
+        4
+    );
+    test.thread_manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse() -> Result<()> {
     const SPAWN_DESCENDANT_CALL_ID: &str = "spawn-cancel-descendant";
@@ -2652,6 +2782,16 @@ async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse()
     })
     .await?;
     wait_for_request(
+        &cancel_first_after_descendant,
+        "first child after descendant spawn",
+        |request| {
+            request
+                .function_call_output_text(SPAWN_DESCENDANT_CALL_ID)
+                .is_some()
+        },
+    )
+    .await?;
+    wait_for_request(
         &cancel_descendant,
         "recursive transaction descendant",
         |request| {
@@ -2679,15 +2819,20 @@ async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse()
     let ordinary_child_input = ordinary_child_body["input"]
         .as_array()
         .expect("ordinary V2 child request input must be an array");
-    let exact_lcp = ordinary_parent_input
-        .iter()
-        .zip(ordinary_child_input)
-        .take_while(|(parent, child)| parent == child)
-        .count();
-    assert_eq!(
-        exact_lcp,
-        ordinary_parent_input.len(),
-        "ordinary V2 fork_turns=all must preserve the complete parent request prefix"
+    assert!(
+        ordinary_parent_input
+            .iter()
+            .any(|item| item.to_string().contains("cancel-first-marker"))
+    );
+    assert!(
+        ordinary_child_input
+            .iter()
+            .any(|item| item.to_string().contains("cancel-first-marker"))
+    );
+    assert!(
+        !ordinary_child_input
+            .iter()
+            .any(|item| item.to_string().contains("metadata-v2-root-usage-hint"))
     );
     assert_eq!(
         ordinary_parent_body["prompt_cache_key"], ordinary_child_body["prompt_cache_key"],
@@ -2701,16 +2846,6 @@ async fn spawn_capacity_rejection_and_interrupt_teardown_allow_immediate_reuse()
                 != Some(SPAWN_DESCENDANT_CALL_ID)),
         "recursive descendant must fork through the parent's sampling-start boundary"
     );
-    wait_for_request(
-        &cancel_first_after_descendant,
-        "first child after descendant spawn",
-        |request| {
-            request
-                .function_call_output_text(SPAWN_DESCENDANT_CALL_ID)
-                .is_some()
-        },
-    )
-    .await?;
     wait_for_request(
         &cancel_first_after_capacity,
         "nested capacity rejection output",

@@ -44,7 +44,7 @@ impl ChatWidget {
         let subtitle = subtitle.to_string();
         let mut header = ColumnRenderable::new();
         header.push(Line::from(title.bold()));
-        header.push(Line::from(subtitle.dim()));
+        header.push(Paragraph::new(Line::from(subtitle.dim())).wrap(Wrap { trim: false }));
         if let Some(warning) = self.model_menu_warning_line() {
             header.push(warning);
         }
@@ -243,7 +243,7 @@ impl ChatWidget {
 
         let header = self.model_menu_header(
             "Select Model and Effort",
-            &format!("Legacy models: {CLI_COMMAND} -m <model_name> or config.toml"),
+            &format!("Access legacy models by running {CLI_COMMAND} -m <model_name> or in your config.toml"),
         );
         self.show_model_selection_view(SelectionViewParams {
             view_id: Some(view_id),

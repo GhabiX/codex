@@ -13,7 +13,7 @@ README = ROOT / "README.md"
 PACKAGE_JSON = ROOT / "codex-cli" / "package.json"
 CARGO_TOML = ROOT / "codex-rs" / "Cargo.toml"
 INSTALL_CONTEXT = ROOT / "codex-rs" / "install-context" / "src" / "distribution.rs"
-RELEASE_NOTES = ROOT / "RELEASE_NOTES.md"
+RELEASE_NOTES_DIR = ROOT / "codex-rs" / "docs"
 
 NATIVE_TARGETS = {
     "x86_64-unknown-linux-musl",
@@ -65,7 +65,7 @@ class SpineReleaseWorkflowTest(unittest.TestCase):
         )
         self.assertIsNotNone(workspace_version)
         self.assertIn(f'version = "{workspace_version.group(1)}"', cargo)
-        release_notes = RELEASE_NOTES
+        release_notes = RELEASE_NOTES_DIR / f"releases-{workspace_version.group(1)}.md"
         self.assertTrue(release_notes.is_file())
         self.assertIn(
             workspace_version.group(1), release_notes.read_text(encoding="utf-8")

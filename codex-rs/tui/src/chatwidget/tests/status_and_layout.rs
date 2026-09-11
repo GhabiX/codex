@@ -3864,7 +3864,7 @@ impl crate::workspace_command::WorkspaceCommandExecutor for NoopWorkspaceCommand
 async fn interrupted_turn_clears_visible_running_hook() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
-    chat.bottom_pane.set_organic_working_word(Some("Kindling"));
+    chat.bottom_pane.set_organic_working_word(Some("Working"));
 
     handle_hook_started(
         &mut chat,
@@ -3892,7 +3892,7 @@ async fn interrupted_turn_clears_visible_running_hook() {
 async fn completed_turn_clears_visible_running_hook() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
-    chat.bottom_pane.set_organic_working_word(Some("Kindling"));
+    chat.bottom_pane.set_organic_working_word(Some("Working"));
 
     handle_hook_started(
         &mut chat,
@@ -5257,7 +5257,7 @@ async fn running_hooks_fit_around_background_activity_and_finish_without_history
     ] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.on_task_started();
-        chat.bottom_pane.set_organic_working_word(Some("Kindling"));
+        chat.bottom_pane.set_organic_working_word(Some("Working"));
         begin_unified_exec_startup(&mut chat, "call-1", "proc-1", "sleep 2");
         chat.bottom_pane.hide_status_indicator();
 

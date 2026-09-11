@@ -4,9 +4,6 @@ use crate::context::world_state::validate_managed_developer_instructions;
 use crate::guardian::BUNDLED_GUARDIAN_POLICY;
 use crate::path_utils::normalize_for_native_workdir;
 pub use crate::spine::config::SpineConfiguration;
-use crate::spine::config_snapshot::config_without_lock_controls;
-use crate::spine::config_snapshot::lock_layer_from_config;
-use crate::spine::config_snapshot::read_config_lock_from_path;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -40,7 +37,6 @@ use codex_config::loader::project_trust_key;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
-use codex_config::spine_snapshot::ConfigLockfileToml;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_config::types::AuthKeyringBackendKind;
@@ -610,19 +606,6 @@ pub enum ThreadStoreConfig {
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
-    /// Directory where Codex writes effective session config lock files.
-    pub config_lock_export_dir: Option<AbsolutePathBuf>,
-
-    /// Whether config lock replay ignores Codex version drift between the
-    /// lock metadata and the regenerated lock.
-    pub config_lock_allow_codex_version_mismatch: bool,
-
-    /// Whether config lock creation saves values resolved from the model
-    /// catalog/session configuration.
-    pub config_lock_save_fields_resolved_from_model_catalog: bool,
-
-    /// Effective config lock used for strict replay validation.
-    pub config_lock_toml: Option<Arc<ConfigLockfileToml>>,
     /// Provenance for how this [`Config`] was derived (merged layers + enforced
     /// requirements).
     pub config_layer_stack: ConfigLayerStack,
@@ -1521,39 +1504,6 @@ impl ConfigBuilder {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
             }
         };
-        let config_lock_settings = config_toml.spine_snapshot_settings();
-        if let Some(config_lock_load_path) =
-            config_lock_settings.and_then(|config_lock| config_lock.load_path.as_ref())
-        {
-            let allow_codex_version_mismatch = config_lock_settings
-                .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
-                .unwrap_or(false);
-            let save_fields_resolved_from_model_catalog = config_lock_settings
-                .and_then(|config_lock| config_lock.save_fields_resolved_from_model_catalog)
-                .unwrap_or(true);
-            let lockfile_toml = read_config_lock_from_path(config_lock_load_path).await?;
-            let expected_lock_config = lockfile_toml.clone();
-            let lock_layer = lock_layer_from_config(config_lock_load_path, &lockfile_toml)?;
-            let lock_config_toml = config_without_lock_controls(&lockfile_toml.config);
-            let lock_config_layer_stack = ConfigLayerStack::new(
-                vec![lock_layer],
-                config_layer_stack.requirements().clone(),
-                config_layer_stack.requirements_toml().clone(),
-            )?;
-            let mut config = Config::load_config_with_layer_stack(
-                LOCAL_FS.as_ref(),
-                lock_config_toml,
-                harness_overrides,
-                codex_home,
-                lock_config_layer_stack,
-            )
-            .await?;
-            config.config_lock_toml = Some(Arc::new(expected_lock_config));
-            config.config_lock_allow_codex_version_mismatch = allow_codex_version_mismatch;
-            config.config_lock_save_fields_resolved_from_model_catalog =
-                save_fields_resolved_from_model_catalog;
-            return Ok(config);
-        }
         Config::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             config_toml,
@@ -3229,7 +3179,6 @@ impl Config {
         codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
-        let spine_snapshot_settings = cfg.spine_snapshot_settings().cloned();
         // Keep the large config-construction future off small test thread stacks.
         Box::pin(async move {
         if cfg.experimental_thread_store_endpoint.is_some() {
@@ -3456,7 +3405,6 @@ impl Config {
         let home_directory = dirs::home_dir();
         let spine = SpineConfiguration::pending(
             cfg.spine_config_file.as_ref(),
-            cfg.spine_config_snapshot.as_ref(),
             resolved_cwd.as_path(),
             home_directory.as_deref(),
             active_project.is_trusted(),
@@ -4404,15 +4352,6 @@ impl Config {
             sleep_tool_mode,
             features,
             spine,
-            config_lock_export_dir: spine_snapshot_settings.as_ref()
-                .and_then(|config_lock| config_lock.export_dir.clone()),
-            config_lock_allow_codex_version_mismatch: spine_snapshot_settings.as_ref()
-                .and_then(|config_lock| config_lock.allow_codex_version_mismatch)
-                .unwrap_or(false),
-            config_lock_save_fields_resolved_from_model_catalog: spine_snapshot_settings.as_ref()
-                .and_then(|config_lock| config_lock.save_fields_resolved_from_model_catalog)
-                .unwrap_or(true),
-            config_lock_toml: None,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
                 .unwrap_or(false),

@@ -1646,7 +1646,7 @@ pub(super) async fn assert_hook_events_snapshot(
 ) {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
-    chat.bottom_pane.set_organic_working_word(Some("Kindling"));
+    chat.bottom_pane.set_organic_working_word(Some("Working"));
 
     handle_hook_started(
         &mut chat,
@@ -1674,7 +1674,7 @@ pub(super) async fn assert_hook_events_snapshot(
     assert!(
         running
             .lines()
-            .any(|line| line.contains("Kindling") && line.contains(status_message)),
+            .any(|line| line.contains("Working") && line.contains(status_message)),
         "hook start should render its status in the activity row: {running}"
     );
 

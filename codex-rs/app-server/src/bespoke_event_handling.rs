@@ -1232,31 +1232,32 @@ pub(crate) async fn apply_bespoke_event_handling(
                 state.pending_rollbacks.take()
             };
 
-            if let Some(request_id) = pending {
-                let _thread_list_state_permit = match thread_list_state_permit.acquire().await {
-                    Ok(permit) => permit,
-                    Err(err) => {
-                        outgoing
-                            .send_error(
-                                request_id,
-                                internal_error(format!(
-                                    "failed to acquire thread list state permit: {err}"
-                                )),
-                            )
-                            .await;
-                        return;
-                    }
-                };
-                let config_snapshot = conversation.config_snapshot().await;
-                let stored_thread = match conversation
-                    .read_thread(
-                        /*include_archived*/ true, /*include_history*/ true,
-                    )
-                    .await
-                {
-                    Ok(stored_thread) => stored_thread,
-                    Err(err) => {
-                        outgoing
+            'response: {
+                if let Some(request_id) = pending {
+                    let _thread_list_state_permit = match thread_list_state_permit.acquire().await {
+                        Ok(permit) => permit,
+                        Err(err) => {
+                            outgoing
+                                .send_error(
+                                    request_id,
+                                    internal_error(format!(
+                                        "failed to acquire thread list state permit: {err}"
+                                    )),
+                                )
+                                .await;
+                            break 'response;
+                        }
+                    };
+                    let config_snapshot = conversation.config_snapshot().await;
+                    let stored_thread = match conversation
+                        .read_thread(
+                            /*include_archived*/ true, /*include_history*/ true,
+                        )
+                        .await
+                    {
+                        Ok(stored_thread) => stored_thread,
+                        Err(err) => {
+                            outgoing
                             .send_error(
                                 request_id.clone(),
                                 internal_error(format!(
@@ -1264,30 +1265,31 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 )),
                             )
                             .await;
-                        return;
-                    }
-                };
-                let loaded_status = thread_watch_manager
-                    .loaded_status_for_thread(&conversation_id.to_string())
-                    .await;
-                let mut response = match thread_rollback_response_from_stored_thread(
-                    stored_thread,
-                    conversation.session_configured().session_id.to_string(),
-                    fallback_model_provider.as_str(),
-                    config_snapshot.cwd(),
-                    loaded_status,
-                ) {
-                    Ok(response) => response,
-                    Err(err) => {
-                        outgoing
-                            .send_error(request_id.clone(), internal_error(err))
-                            .await;
-                        return;
-                    }
-                };
+                            break 'response;
+                        }
+                    };
+                    let loaded_status = thread_watch_manager
+                        .loaded_status_for_thread(&conversation_id.to_string())
+                        .await;
+                    let mut response = match thread_rollback_response_from_stored_thread(
+                        stored_thread,
+                        conversation.session_configured().session_id.to_string(),
+                        fallback_model_provider.as_str(),
+                        config_snapshot.cwd(),
+                        loaded_status,
+                    ) {
+                        Ok(response) => response,
+                        Err(err) => {
+                            outgoing
+                                .send_error(request_id.clone(), internal_error(err))
+                                .await;
+                            break 'response;
+                        }
+                    };
 
-                apply_live_model_settings(&mut response.thread, &config_snapshot);
-                outgoing.send_response(request_id, response).await;
+                    apply_live_model_settings(&mut response.thread, &config_snapshot);
+                    outgoing.send_response(request_id, response).await;
+                }
             }
             outgoing
                 .send_server_notification(ServerNotification::ThreadRolledBack(
@@ -2376,8 +2378,10 @@ mod tests {
         Ok(())
     }
 
+    #[test_case::test_case(false; "without pending request")]
+    #[test_case::test_case(true; "response construction fails")]
     #[tokio::test]
-    async fn thread_rolled_back_notifies_observers_without_a_pending_request() -> Result<()> {
+    async fn thread_rolled_back_notifies_observers(response_fails: bool) -> Result<()> {
         let codex_home = TempDir::new()?;
         let config = load_default_config_for_test(&codex_home).await;
         let thread_manager = Arc::new(
@@ -2406,6 +2410,17 @@ mod tests {
             conversation_id,
         );
 
+        let state = new_thread_state();
+        let permit = Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1));
+        if response_fails {
+            state.lock().await.pending_rollbacks =
+                Some(crate::outgoing_message::ConnectionRequestId {
+                    connection_id: ConnectionId(1),
+                    request_id: RequestId::Integer(12),
+                });
+            permit.close();
+        }
+
         apply_bespoke_event_handling(
             Event {
                 id: "rollback".to_string(),
@@ -2417,13 +2432,24 @@ mod tests {
             conversation,
             thread_manager,
             outgoing,
-            new_thread_state(),
+            state,
             ThreadWatchManager::new(),
-            Arc::new(tokio::sync::Semaphore::new(/*permits*/ 1)),
+            permit,
             "test-provider".to_string(),
         )
         .await;
 
+        if response_fails {
+            let error = rx.recv().await.expect("rollback response error");
+            assert!(matches!(
+                error,
+                OutgoingEnvelope::ToConnection {
+                    connection_id: ConnectionId(1),
+                    message: OutgoingMessage::Error(_),
+                    ..
+                }
+            ));
+        }
         for expected_connection_id in [ConnectionId(1), ConnectionId(2)] {
             let envelope = rx
                 .recv()

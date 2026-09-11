@@ -3,7 +3,7 @@ source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
 ╭─────────────────────────────────────────────────────────╮
-│ ✨ Update available! 0.4.1 -> 9.9.9                     │
+│ ✨ Update available! 0.4.0 -> 9.9.9                     │
 │ Run pnpm add -g @spinejit/spine-codex@latest to update. │
 │                                                         │
 │ See full release notes:                                 │

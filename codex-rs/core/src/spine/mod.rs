@@ -24,7 +24,6 @@ use spine_core::host::ValidatedTransition;
 use std::collections::BTreeMap;
 
 pub(crate) mod config;
-pub(crate) mod config_snapshot;
 pub(crate) mod context_handler;
 pub(crate) mod context_plan;
 #[cfg(test)]

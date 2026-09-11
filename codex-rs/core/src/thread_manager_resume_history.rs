@@ -5,6 +5,7 @@ impl ThreadManagerState {
     pub(crate) async fn load_resumed_history(
         &self,
         metadata: &StoredThread,
+        config: &Config,
     ) -> CodexResult<ResumedHistory> {
         let thread_id = metadata.thread_id;
         let (history, spine_history) = match metadata.history_mode {
@@ -42,15 +43,20 @@ impl ThreadManagerState {
                         include_archived: true,
                     })
                     .await?;
-                let complete = self
-                    .thread_store
-                    .load_complete_history(LoadThreadHistoryParams {
-                        thread_id,
-                        include_archived: true,
-                    })
-                    .await
-                    .map_err(thread_store_rollout_read_error)?;
-                (model_context.items, Some(Arc::new(complete.items)))
+                let spine_history = if config.features.enabled(codex_features::Feature::SpineJit) {
+                    let complete = self
+                        .thread_store
+                        .load_complete_history(LoadThreadHistoryParams {
+                            thread_id,
+                            include_archived: true,
+                        })
+                        .await
+                        .map_err(thread_store_rollout_read_error)?;
+                    Some(Arc::new(complete.items))
+                } else {
+                    None
+                };
+                (model_context.items, spine_history)
             }
         };
         Ok(ResumedHistory {

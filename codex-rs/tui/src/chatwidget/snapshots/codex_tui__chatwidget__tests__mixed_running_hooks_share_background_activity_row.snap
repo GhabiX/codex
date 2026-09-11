@@ -5,7 +5,7 @@ expression: "format!(\"80 columns:\\n{}\\n120 columns:\\n{}\", hook_status_frame
 ---
 80 columns:
 "                                                                                "
-" . Kindling (0s • esc to interrupt) · 1 background terminal running · /ps to vi…"
+" . Working (0s • esc to interrupt) · 1 background terminal running · /ps to vie…"
 "  └ Running hooks                                                               "
 "                                                                                "
 "                                                                                "
@@ -14,7 +14,7 @@ expression: "format!(\"80 columns:\\n{}\\n120 columns:\\n{}\", hook_status_frame
 "  gpt-5.6-sol default · /tmp/project                                            "
 120 columns:
 "                                                                                                                        "
-" . Kindling (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · Running hooks      "
+" . Working (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close · Running hooks       "
 "                                                                                                                        "
 "                                                                                                                        "
 "› Ask Codex to do anything                                                                                              "

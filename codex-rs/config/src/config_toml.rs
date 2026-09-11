@@ -161,16 +161,6 @@ pub struct SpineSpawnConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
-    /// Spine configuration snapshot import/export controls.
-    pub spine_snapshot: Option<crate::spine_snapshot::DebugConfigLockToml>,
-    /// Compatibility controls for sessions exported before SpineCodex 0.4.
-    pub debug: Option<crate::spine_snapshot::DebugToml>,
-    /// Settings for children created through `spine.spawn`.
-    pub spine_spawn: Option<SpineSpawnConfigToml>,
-    /// Explicit Spine SDK configuration layer.
-    pub spine_config_file: Option<AbsolutePathBuf>,
-    /// Resolved Spine configuration embedded in a versioned session snapshot.
-    pub spine_config_snapshot: Option<crate::spine_snapshot::SpineConfigLockToml>,
     /// Optional override of model selection.
     pub model: Option<String>,
     /// Review model override used by the `/review` feature.
@@ -464,6 +454,9 @@ pub struct ConfigToml {
     /// Goal-related settings.
     pub goals: Option<GoalsToml>,
 
+    /// Settings for child threads created through `spine.spawn`.
+    pub spine_spawn: Option<SpineSpawnConfigToml>,
+
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
 
@@ -486,6 +479,10 @@ pub struct ConfigToml {
     // Injects known feature keys into the schema and forbids unknown keys.
     #[schemars(schema_with = "crate::schema::features_schema")]
     pub features: Option<FeaturesToml>,
+
+    /// Optional Spine SDK configuration file. Relative paths are resolved by
+    /// the normal layered config loader before this typed config is built.
+    pub spine_config_file: Option<AbsolutePathBuf>,
 
     /// Suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: Option<bool>,

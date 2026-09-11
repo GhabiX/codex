@@ -1042,7 +1042,9 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
-        let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
+        let initial_history = self
+            .initial_history_from_rollout_path(rollout_path, &config)
+            .await?;
         Box::pin(self.resume_thread_with_history(
             config,
             initial_history,
@@ -1149,7 +1151,9 @@ impl ThreadManager {
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
-        let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
+        let initial_history = self
+            .initial_history_from_rollout_path(rollout_path, &config)
+            .await?;
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
@@ -1259,7 +1263,9 @@ impl ThreadManager {
         S: Into<ForkSnapshot>,
     {
         let snapshot = snapshot.into();
-        let history = self.initial_history_from_rollout_path(path).await?;
+        let history = self
+            .initial_history_from_rollout_path(path, &config)
+            .await?;
         self.fork_thread_from_history(
             snapshot,
             config,
@@ -1275,6 +1281,7 @@ impl ThreadManager {
     async fn initial_history_from_rollout_path(
         &self,
         rollout_path: PathBuf,
+        config: &Config,
     ) -> CodexResult<InitialHistory> {
         let metadata = self
             .state
@@ -1286,7 +1293,7 @@ impl ThreadManager {
             })
             .await
             .map_err(thread_store_rollout_read_error)?;
-        let mut history = self.state.load_resumed_history(&metadata).await?;
+        let mut history = self.state.load_resumed_history(&metadata, config).await?;
         history.rollout_path = Some(rollout_path);
         Ok(InitialHistory::Resumed(history))
     }

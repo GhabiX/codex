@@ -3,7 +3,7 @@ source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
 ╭─────────────────────────────────────╮
-│ >_ Spine Codex (v0.4.1)             │
+│ >_ Spine Codex (v0.4.0)             │
 │                                     │
 │ model:     gpt-5   /model to change │
 │ directory: /tmp/project             │

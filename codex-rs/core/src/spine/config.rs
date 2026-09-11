@@ -1,9 +1,6 @@
 use crate::config::ManagedFeatures;
-use codex_config::spine_snapshot::SpineConfigLockToml;
-use codex_config::spine_snapshot::SpineConfigSourceLockToml;
 use codex_features::Feature as CodexFeature;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use spine_core::host::RecordDigest;
 use spine_core::host::SpineConfig;
 use spine_core::host::SpineConfigLoader;
 use spine_core::host::ToolCatalog;
@@ -19,7 +16,6 @@ pub struct SpineConfiguration {
 #[derive(Clone, Debug, PartialEq)]
 enum ConfigurationState {
     Sources(SpineConfigLoader),
-    Snapshot(SpineConfigLockToml),
     Resolved(Box<ResolvedConfiguration>),
 }
 
@@ -27,47 +23,30 @@ enum ConfigurationState {
 struct ResolvedConfiguration {
     sdk: SpineConfig,
     tools: ToolCatalog,
-    snapshot: SpineConfigLockToml,
 }
 
 impl SpineConfiguration {
     pub(crate) fn pending(
         path: Option<&AbsolutePathBuf>,
-        snapshot: Option<&SpineConfigLockToml>,
         working_directory: &Path,
         home_directory: Option<&Path>,
         project_config_trusted: bool,
     ) -> Self {
         Self {
-            state: match snapshot {
-                Some(snapshot) => ConfigurationState::Snapshot(snapshot.clone()),
-                None => ConfigurationState::Sources(loader(
-                    path,
-                    working_directory,
-                    home_directory,
-                    project_config_trusted,
-                )),
-            },
+            state: ConfigurationState::Sources(loader(
+                path,
+                working_directory,
+                home_directory,
+                project_config_trusted,
+            )),
         }
     }
 
     /// Creates an already resolved SDK configuration for an embedding host.
     pub fn from_sdk(sdk: SpineConfig) -> anyhow::Result<Self> {
-        let snapshot = SpineConfigLockToml {
-            schema_version: sdk.schema_version(),
-            bundled_digest: RecordDigest::digest(spine_core::host::DEFAULT_CONFIG_TOML.as_bytes())
-                .as_str()
-                .to_string(),
-            sources: Vec::new(),
-            effective_config: Some(sdk.snapshot_toml()?),
-        };
         let tools = ToolCatalog::new(&sdk)?;
         Ok(Self {
-            state: ConfigurationState::Resolved(Box::new(ResolvedConfiguration {
-                sdk,
-                tools,
-                snapshot,
-            })),
+            state: ConfigurationState::Resolved(Box::new(ResolvedConfiguration { sdk, tools })),
         })
     }
 
@@ -75,7 +54,7 @@ impl SpineConfiguration {
     pub fn sdk(&self) -> &SpineConfig {
         match &self.state {
             ConfigurationState::Resolved(resolved) => &resolved.sdk,
-            ConfigurationState::Sources(_) | ConfigurationState::Snapshot(_) => {
+            ConfigurationState::Sources(_) => {
                 panic!(
                     "session initialization must resolve Spine configuration before using the SDK"
                 )
@@ -87,19 +66,8 @@ impl SpineConfiguration {
     pub fn tools(&self) -> &ToolCatalog {
         match &self.state {
             ConfigurationState::Resolved(resolved) => &resolved.tools,
-            ConfigurationState::Sources(_) | ConfigurationState::Snapshot(_) => {
+            ConfigurationState::Sources(_) => {
                 panic!("session initialization must resolve Spine configuration before using tools")
-            }
-        }
-    }
-
-    pub(crate) fn snapshot(&self) -> &SpineConfigLockToml {
-        match &self.state {
-            ConfigurationState::Resolved(resolved) => &resolved.snapshot,
-            ConfigurationState::Sources(_) | ConfigurationState::Snapshot(_) => {
-                panic!(
-                    "session initialization must resolve Spine configuration before exporting it"
-                )
             }
         }
     }
@@ -109,22 +77,15 @@ impl SpineConfiguration {
         saved: Option<&str>,
         features: &ManagedFeatures,
     ) -> anyhow::Result<Self> {
-        let snapshot = match saved {
-            Some(saved) => Self::from_sdk(SpineConfig::parse_toml(saved)?)?
-                .snapshot()
-                .clone(),
+        let sdk = match saved {
+            Some(saved) => SpineConfig::parse_toml(saved)?,
             None => match &self.state {
-                ConfigurationState::Sources(loader) => lock_snapshot(loader.clone())?,
-                ConfigurationState::Snapshot(snapshot) => snapshot.clone(),
-                ConfigurationState::Resolved(resolved) => resolved.snapshot.clone(),
+                ConfigurationState::Sources(loader) => {
+                    loader.clone().load().map_err(io::Error::from)?
+                }
+                ConfigurationState::Resolved(resolved) => resolved.sdk.clone(),
             },
         };
-        let effective = snapshot.effective_config.as_deref().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Spine snapshot is missing effective config",
-            )
-        })?;
         let enabled = [
             (CodexFeature::SpineJit, spine_core::host::Feature::Jit),
             (CodexFeature::SpineSpawn, spine_core::host::Feature::Spawn),
@@ -132,74 +93,12 @@ impl SpineConfiguration {
         .into_iter()
         .filter(|(host, _)| features.enabled(*host))
         .map(|(_, sdk)| sdk);
-        let sdk = SpineConfig::parse_toml(effective)?.with_features(enabled)?;
+        let sdk = sdk.with_features(enabled)?;
         let tools = ToolCatalog::new(&sdk)?;
         Ok(Self {
-            state: ConfigurationState::Resolved(Box::new(ResolvedConfiguration {
-                sdk,
-                tools,
-                snapshot,
-            })),
+            state: ConfigurationState::Resolved(Box::new(ResolvedConfiguration { sdk, tools })),
         })
     }
-}
-
-fn lock_snapshot(loader: SpineConfigLoader) -> io::Result<SpineConfigLockToml> {
-    let mut sources = loader
-        .optional_source_files()
-        .into_iter()
-        .map(|path| {
-            let digest = match std::fs::read(&path) {
-                Ok(contents) => Some(RecordDigest::digest(&contents).as_str().to_string()),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-                Err(error) => {
-                    return Err(io::Error::new(
-                        error.kind(),
-                        format!(
-                            "failed to pin Spine config source {} in config lock: {error}",
-                            path.display()
-                        ),
-                    ));
-                }
-            };
-            Ok(SpineConfigSourceLockToml {
-                path: AbsolutePathBuf::try_from(path)?,
-                required: false,
-                digest,
-            })
-        })
-        .collect::<io::Result<Vec<_>>>()?;
-    if let Some(path) = loader.required_source_file() {
-        let contents = std::fs::read(&path).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!(
-                    "failed to pin Spine config source {} in config lock: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-        sources.push(SpineConfigSourceLockToml {
-            path: AbsolutePathBuf::try_from(path)?,
-            required: true,
-            digest: Some(RecordDigest::digest(&contents).as_str().to_string()),
-        });
-    }
-
-    Ok(SpineConfigLockToml {
-        schema_version: SpineConfig::v1().schema_version(),
-        bundled_digest: RecordDigest::digest(spine_core::host::DEFAULT_CONFIG_TOML.as_bytes())
-            .as_str()
-            .to_string(),
-        sources,
-        effective_config: Some(
-            loader
-                .load()
-                .map_err(io::Error::from)?
-                .snapshot_toml()
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-        ),
-    })
 }
 
 fn loader(

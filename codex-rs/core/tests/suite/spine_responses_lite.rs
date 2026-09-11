@@ -101,11 +101,7 @@ async fn resume_uses_saved_spine_tools_after_external_config_changes(
         .with_model_info_override("gpt-5.4", |model| model.use_responses_lite = true)
         .with_pre_build_hook(move |home| {
             let config_path = home.join("config.toml");
-            let config = format!(
-                "spine_config_file = {}\n[spine_snapshot]\nexport_dir = {}\n",
-                json!(source),
-                json!(home.join("snapshots"))
-            );
+            let config = format!("spine_config_file = {}\n", json!(source));
             std::fs::write(config_path, config).expect("configure SDK source before ConfigBuilder");
         });
     let server = responses::start_mock_server().await;

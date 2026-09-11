@@ -28,9 +28,6 @@ class SpineProductDocsTest(unittest.TestCase):
     def test_readmes_follow_package_and_release_metadata(self) -> None:
         package, binary, repository = package_metadata()
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        product_version = tomllib.loads(CARGO_TOML.read_text(encoding="utf-8"))[
-            "workspace"
-        ]["package"]["version"]
 
         self.assertRegex(workflow, r"(?m)^name: spine-release$")
         self.assertIn('- "v*.*.*"', workflow)
@@ -44,10 +41,6 @@ class SpineProductDocsTest(unittest.TestCase):
                 self.assertRegex(readme, rf"(?m)^\s*{re.escape(binary)}\s*$")
                 self.assertIn(f"{repository}/releases", readme)
                 self.assertIn("./.github/assets/spinecodex-tree.svg", readme)
-                self.assertTrue(
-                    f"What's new in {product_version}" in readme
-                    or f"{product_version} 更新内容" in readme
-                )
 
     def test_versioning_document_follows_workspace_metadata(self) -> None:
         cargo = tomllib.loads(CARGO_TOML.read_text(encoding="utf-8"))

@@ -12,7 +12,6 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
-use crate::session::spine_snapshot::export_config_lock_if_configured;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
@@ -1257,7 +1256,6 @@ impl Session {
                 );
             }
             session_configuration.thread_name = thread_name.clone();
-            export_config_lock_if_configured(&session_configuration, thread_id).await?;
             let spine_config =
                 crate::spine::session_config::SpineSessionConfig::from_config(config.as_ref());
             let thread_id_text = thread_id.to_string();

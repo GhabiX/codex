@@ -30,18 +30,6 @@ impl CodexSpineCoordinator {
         let start_index = if let Some((index, started)) = first_started
             && let Some(seed) = &started.replay_seed
         {
-            // Opaque source identity is independent of host presentation. Keep the
-            // persisted envelope (including output budgets) authoritative for it.
-            let persisted_items = effective[..index]
-                .iter()
-                .filter_map(|(_, item)| {
-                    if let RolloutItem::ResponseItem(item) = item {
-                        item.item.id().map(|id| (id, item))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<std::collections::HashMap<_, _>>();
             let seed: Vec<ReplaySeedItem> =
                 serde_json::from_value(seed.clone()).map_err(|error| {
                     CoordinatorError::Replay(format!("invalid initialization seed: {error}"))
@@ -50,14 +38,8 @@ impl CodexSpineCoordinator {
                 match item {
                     ReplaySeedItem::Source { boundary, item } => {
                         let item = super::archive::seed_response_item(item)?;
-                        let (character, mut projected) =
+                        let (character, projected) =
                             response_item_to_char_and_source(&item, RawBoundary(boundary));
-                        if matches!(character, spine_core::host::SpineChar::Opaque { .. })
-                            && let Some(id) = item.item.id()
-                            && let Some(persisted) = persisted_items.get(id)
-                        {
-                            projected = (*persisted).clone();
-                        }
                         inputs.push(ReplayInput::Source(character));
                         projected_source_items.push(projected);
                         next_boundary = boundary.saturating_add(1);
@@ -126,9 +108,14 @@ impl CodexSpineCoordinator {
                             "canonical replay record order diverged".to_string(),
                         )
                     })?;
-                    if let SamplingArchiveRecord::SamplingCommit(commit) = &record {
-                        replay_record_thread = commit.commit_id.thread().clone();
-                    }
+                    replay_record_thread = match &record {
+                        SamplingArchiveRecord::SamplingStarted(started) => {
+                            started.attempt_id.thread().clone()
+                        }
+                        SamplingArchiveRecord::SamplingCommit(commit) => {
+                            commit.commit_id.thread().clone()
+                        }
+                    };
                     inputs.push(ReplayInput::Archive(record));
                 }
                 RolloutItem::Compacted(compacted) => {

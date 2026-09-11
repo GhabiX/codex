@@ -47,11 +47,7 @@ the mean score by **9.2 points** on [FrontierSWE](https://www.frontierswe.com).
 | ❌**Drift after repeated compaction?**       | ✅**Minimum Effective Context. Maximum Focus.**<br />Spine Runtime maintains the SpineTree and projects only the context required by the current Work Unit, keeping the agent focused.              |
 | ❌**Lose patience and focus on long tasks?** | ✅**Recursive Subagent Scaling on Demand.**<br />SpineJIT lets the agent recursively unfold into specialized subagents on demand, bringing divide-and-conquer structure and greater reasoning depth to complex problems. |
 
-## What's new in 0.4.1
-
-Targets Codex `0.153.4`, preserving Spine SDK configuration snapshots and history
-metadata across sampling and resume. Fixes concurrent Spine branches failing to
-start when paginated history contains decimal rate-limit values.
+## What's new
 
 ### Upcoming
 

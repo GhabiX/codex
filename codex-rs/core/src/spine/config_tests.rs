@@ -22,7 +22,6 @@ fn trusted_workspace_layers_override_home_configuration() -> anyhow::Result<()> 
     let managed = ManagedFeatures::from(host_features);
     let (config, _) = load(
         /*path*/ None,
-        /*snapshot*/ None,
         working.path(),
         Some(home.path()),
         &managed,
@@ -47,7 +46,6 @@ fn untrusted_workspace_layers_are_not_loaded() -> anyhow::Result<()> {
     let managed = ManagedFeatures::from(host_features);
     let (config, _) = load(
         /*path*/ None,
-        /*snapshot*/ None,
         working.path(),
         /*home_directory*/ None,
         &managed,
@@ -55,7 +53,6 @@ fn untrusted_workspace_layers_are_not_loaded() -> anyhow::Result<()> {
     )?;
     let (baseline, _) = load(
         /*path*/ None,
-        /*snapshot*/ None,
         baseline_working.path(),
         /*home_directory*/ None,
         &managed,
@@ -73,7 +70,6 @@ fn explicit_configuration_is_required_even_for_untrusted_workspace() {
 
     let error = load(
         Some(&missing),
-        /*snapshot*/ None,
         working.path(),
         /*home_directory*/ None,
         &ManagedFeatures::default(),
@@ -100,7 +96,6 @@ fn managed_host_features_select_sdk_features() {
 
     let (config, _) = load(
         /*path*/ None,
-        /*snapshot*/ None,
         working.path(),
         /*home_directory*/ None,
         &managed,
@@ -119,7 +114,6 @@ fn managed_host_features_select_sdk_features() {
 
 fn load(
     path: Option<&AbsolutePathBuf>,
-    snapshot: Option<&SpineConfigLockToml>,
     working_directory: &Path,
     home_directory: Option<&Path>,
     features: &ManagedFeatures,
@@ -127,7 +121,6 @@ fn load(
 ) -> anyhow::Result<(SpineConfig, ToolCatalog)> {
     let resolved = SpineConfiguration::pending(
         path,
-        snapshot,
         working_directory,
         home_directory,
         project_config_trusted,

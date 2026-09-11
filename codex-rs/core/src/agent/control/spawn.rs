@@ -521,7 +521,7 @@ impl AgentControl {
         let stored_source = stored_thread.source.clone();
         let stored_parent_thread_id = stored_thread.parent_thread_id;
         let initial_history =
-            InitialHistory::Resumed(state.load_resumed_history(&stored_thread).await?);
+            InitialHistory::Resumed(state.load_resumed_history(&stored_thread, &config).await?);
         if initial_history.get_multi_agent_version() != Some(MultiAgentVersion::V2) {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
@@ -1094,25 +1094,44 @@ impl AgentControl {
         // same durable boundary as Spine Spawn. The paginated model-context snapshot can
         // contain only a projection of the canonical source and cannot seed child replay.
         let needs_spine_checkpoint = parent_thread.session.has_pending_spine_sampling()
-            && (matches!(fork_mode, SpawnAgentForkMode::LastNTurns(_))
-                || *fork_mode == SpawnAgentForkMode::FullHistory
-                    && subagent_developer_instructions.is_some());
+            && matches!(
+                fork_mode,
+                SpawnAgentForkMode::LastNTurns(_) | SpawnAgentForkMode::FullHistory
+            );
         let checkpoint_prefix = if needs_spine_checkpoint {
-            Some(
-                state
+            let prefix = match parent_history_mode {
+                ThreadHistoryMode::Paginated => state
                     .prepare_fork(
                         parent_thread_id,
                         ForkBoundary::ThroughLatestSpineSamplingStarted,
                     )
-                    .await?,
-            )
+                    .await?
+                    .complete_history
+                    .ok_or_else(|| {
+                        CodexErr::Fatal("Spine fork requires complete source lineage".to_string())
+                    })?,
+                ThreadHistoryMode::Legacy => {
+                    let mut history =
+                        load_agent_model_context(state, parent_thread_id, parent_history_mode)
+                            .await?
+                            .ok_or_else(|| {
+                                CodexErr::Fatal(format!(
+                                    "parent thread history unavailable for fork: {parent_thread_id}"
+                                ))
+                            })?;
+                    if !crate::spine::truncate_to_current_sampling_start(&mut history) {
+                        return Err(CodexErr::Fatal(format!(
+                            "parent thread `{parent_thread_id}` has no uncommitted sampling boundary"
+                        )));
+                    }
+                    Arc::new(history)
+                }
+            };
+            Some(prefix)
         } else {
             None
         };
-        let fork_at_sampling_start = fork_mode == &SpawnAgentForkMode::FullHistoryAtSamplingStart
-            || fork_mode == &SpawnAgentForkMode::FullHistory
-                && parent_thread.session.has_pending_spine_sampling()
-                && !needs_spine_checkpoint;
+        let fork_at_sampling_start = fork_mode == &SpawnAgentForkMode::FullHistoryAtSamplingStart;
         if fork_at_sampling_start {
             let mut thread_extension_init = ExtensionDataInit::new();
             match parent_history_mode {
@@ -1220,7 +1239,12 @@ impl AgentControl {
         let destination_history_mode = matches!(parent_history_mode, ThreadHistoryMode::Paginated)
             .then_some(ThreadHistoryMode::Paginated);
         let mut forked_rollout_items = match &checkpoint_prefix {
-            Some(prepared) => prepared.model_context.as_ref().clone(),
+            Some(prefix) => {
+                parent_thread
+                    .session
+                    .project_spine_fork_context(prefix)
+                    .await?
+            }
             None => load_agent_model_context(state, parent_thread_id, parent_history_mode)
                 .await?
                 .ok_or_else(|| {
@@ -1428,12 +1452,7 @@ impl AgentControl {
                 subagent_usage_hint_message.into(),
             ));
         }
-        if let Some(prepared) = &checkpoint_prefix {
-            let prefix = prepared.complete_history.as_deref().ok_or_else(|| {
-                CodexErr::Fatal(
-                    "Spine fork checkpoint requires complete source lineage".to_string(),
-                )
-            })?;
+        if let Some(prefix) = &checkpoint_prefix {
             forked_rollout_items = parent_thread
                 .session
                 .checkpoint_spine_fork_context(prefix, &forked_rollout_items)
@@ -1560,7 +1579,7 @@ impl AgentControl {
         let resumed_agent_nickname = stored_thread.agent_nickname.clone();
         let resumed_agent_role = stored_thread.agent_role.clone();
         let initial_history =
-            InitialHistory::Resumed(state.load_resumed_history(&stored_thread).await?);
+            InitialHistory::Resumed(state.load_resumed_history(&stored_thread, &config).await?);
         let parent_thread_id = stored_thread.parent_thread_id;
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(
